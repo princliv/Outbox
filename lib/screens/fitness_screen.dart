@@ -9,6 +9,7 @@ import '../widgets/membership_card.dart';
 import '../widgets/fitness_session_modal.dart';
 import '../widgets/membership_modal.dart';
 import '../models/membership_card_model.dart';
+import '../utils/card_display_utils.dart';
 import '../services/notification_service.dart';
 import '../services/subscription_service.dart';
 import '../services/package_service.dart';
@@ -26,9 +27,28 @@ class FitnessScreen extends StatefulWidget {
 }
 
 class _FitnessScreenState extends State<FitnessScreen> {
+  final _searchController = TextEditingController();
   String searchQuery = '';
   String? selectedTrainer;
   bool filterFutureDate = false;
+  DateTime? selectedDate;
+  Future<bool>? _hasContentFuture;
+
+  @override
+  void initState() {
+    super.initState();
+    _hasContentFuture = _hasAnyContent();
+  }
+
+  Future<bool> _hasAnyContent() async {
+    try {
+      final memberships = await getMembershipsStream().first;
+      final classes = await fetchTodaysClasses(categoryFilter: 'fitness');
+      return memberships.isNotEmpty || classes.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
 
   /// Session descriptions map
   static const Map<String, String> sessionDescriptions = {
@@ -51,6 +71,12 @@ class _FitnessScreenState extends State<FitnessScreen> {
     "OUTMOVE": "https://images.unsplash.com/photo-1506126613408-eca07ce68773?w=800&h=400&fit=crop&q=80",
     "OUTCORE": "https://images.unsplash.com/photo-1506126613408-eca07ce68773?w=800&h=400&fit=crop&q=80",
   };
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
 
   /// Get all trainers from your API
   Future<List<String>> getTrainers() async {
@@ -197,9 +223,7 @@ class _FitnessScreenState extends State<FitnessScreen> {
             : trainer?.toString() ?? 'Unknown Trainer';
         
         final address = sub['Address'] is Map ? sub['Address'] : {};
-        final location = address['location']?.toString() ?? 
-                        address['addressLine1']?.toString() ?? 
-                        'Location TBD';
+        final location = formatCardLocation(address);
         
         final dates = sub['date'];
         String dateStr = '';
@@ -248,7 +272,21 @@ class _FitnessScreenState extends State<FitnessScreen> {
     return list.where((card) {
       final matchesName = searchQuery.isEmpty || card.title.toLowerCase().contains(searchQuery.toLowerCase());
       final matchesTrainer = selectedTrainer == null || card.mentor == selectedTrainer;
-      final matchesDate = !filterFutureDate || DateTime.tryParse(card.date)?.isAfter(DateTime.now()) == true;
+      final DateTime? cardDate = DateTime.tryParse(card.date);
+      bool matchesDate = true;
+
+      // If a specific calendar date is selected, match exactly on that date
+      if (selectedDate != null && cardDate != null) {
+        matchesDate = cardDate.year == selectedDate!.year &&
+            cardDate.month == selectedDate!.month &&
+            cardDate.day == selectedDate!.day;
+      }
+
+      // If "Future Dates" filter is enabled and no specific date selected, only show future classes
+      if (selectedDate == null && filterFutureDate && cardDate != null) {
+        matchesDate = cardDate.isAfter(DateTime.now());
+      }
+
       return matchesName && matchesTrainer && matchesDate;
     }).toList();
   }
@@ -320,8 +358,39 @@ class _FitnessScreenState extends State<FitnessScreen> {
 
     return Scaffold(
       backgroundColor: scaffoldBackground,
-      body: SingleChildScrollView(
-  padding: const EdgeInsets.fromLTRB(24, 0, 24, 120),
+      body: FutureBuilder<bool>(
+        future: _hasContentFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.data != true) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.schedule, size: 64, color: accentColor.withOpacity(0.7)),
+                  const SizedBox(height: 24),
+                  Text(
+                    'Coming soon',
+                    style: GoogleFonts.montserrat(
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      color: headlineColor,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Classes and memberships for this section will appear here.',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.inter(color: subTextColor, fontSize: 16),
+                  ),
+                ],
+              ),
+            );
+          }
+          return SingleChildScrollView(
+        padding: const EdgeInsets.fromLTRB(24, 0, 24, 120),
 
         child: Column(
           children: [
@@ -353,6 +422,7 @@ class _FitnessScreenState extends State<FitnessScreen> {
                       Expanded(
                         flex: 3,
                         child: TextField(
+                          controller: _searchController,
                           onChanged: (value) => setState(() => searchQuery = value),
                           decoration: InputDecoration(
                             border: InputBorder.none,
@@ -381,19 +451,22 @@ class _FitnessScreenState extends State<FitnessScreen> {
                           future: getTrainers(),
                           builder: (context, snapshot) {
                             final trainers = snapshot.data ?? [];
+                            final onSurface = Theme.of(context).colorScheme.onSurface;
                             return DropdownButton<String>(
                               hint: Text(
                                 "Select Trainer",
-                                style: GoogleFonts.inter(),
+                                style: GoogleFonts.inter(color: onSurface),
                               ),
                               value: selectedTrainer,
                               isExpanded: true,
+                              dropdownColor: Theme.of(context).colorScheme.surfaceContainerHighest,
+                              style: GoogleFonts.inter(color: onSurface),
                               items: trainers
                                   .map((trainer) => DropdownMenuItem(
                                         value: trainer,
                                         child: Text(
                                           trainer,
-                                          style: GoogleFonts.inter(),
+                                          style: GoogleFonts.inter(color: onSurface),
                                         ),
                                       ))
                                   .toList(),
@@ -405,15 +478,65 @@ class _FitnessScreenState extends State<FitnessScreen> {
                         ),
                       ),
                       const SizedBox(width: 8),
+                      // Calendar date filter
+                      InkWell(
+                        onTap: () async {
+                          final picked = await showDatePicker(
+                            context: context,
+                            initialDate: selectedDate ?? DateTime.now(),
+                            firstDate: DateTime.now().subtract(const Duration(days: 365)),
+                            lastDate: DateTime(2100),
+                          );
+                          if (picked != null) {
+                            setState(() {
+                              selectedDate = DateTime(picked.year, picked.month, picked.day);
+                            });
+                          }
+                        },
+                        child: Row(
+                          children: [
+                            Icon(Icons.calendar_today, color: accentColor, size: 20),
+                            const SizedBox(width: 4),
+                            Text(
+                              selectedDate == null
+                                  ? "Any date"
+                                  : "${selectedDate!.year}-${selectedDate!.month.toString().padLeft(2, '0')}-${selectedDate!.day.toString().padLeft(2, '0')}",
+                              style: GoogleFonts.inter(color: Theme.of(context).colorScheme.onSurface),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      // Future dates toggle
                       Checkbox(
                         value: filterFutureDate,
-                        onChanged: (value) => setState(() => filterFutureDate = value!),
+                        onChanged: (value) => setState(() => filterFutureDate = value ?? false),
                       ),
                       Text(
-                        "Future Dates",
-                        style: GoogleFonts.inter(),
+                        "Future",
+                        style: GoogleFonts.inter(color: Theme.of(context).colorScheme.onSurface),
                       ),
                     ],
+                  ),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: () {
+                        _searchController.clear();
+                        setState(() {
+                          searchQuery = '';
+                          selectedTrainer = null;
+                          selectedDate = null;
+                          filterFutureDate = false;
+                        });
+                      },
+                      icon: Icon(Icons.refresh, size: 18, color: accentColor),
+                      label: Text(
+                        'Reset filters',
+                        style: GoogleFonts.inter(color: accentColor, fontSize: 13),
+                      ),
+                    ),
                   ),
                 ],
               ),
@@ -441,8 +564,12 @@ class _FitnessScreenState extends State<FitnessScreen> {
             const SizedBox(height: 28),
             FitnessSessionsGrid(sessions: sessions, isDarkMode: widget.isDarkMode),
 const SizedBox(height: 28),
-TodaysClassesList(isDarkMode: widget.isDarkMode),
-const SizedBox(height: 92),
+TodaysClassesList(
+              isDarkMode: widget.isDarkMode,
+              categoryFilter: 'fitness',
+              selectedDate: selectedDate,
+            ),
+            const SizedBox(height: 92),
 
 
             /// TOP MEMBERSHIP SECTION
@@ -492,6 +619,7 @@ const SizedBox(height: 92),
                             onTap: () {
                               MembershipModal.show(context, card, widget.isDarkMode);
                             },
+                            cardBackgroundColor: widget.isDarkMode ? const Color(0xFF1E293B) : null,
                           ),
                         )
                         .toList(),
@@ -502,18 +630,21 @@ const SizedBox(height: 92),
 
             const SizedBox(height: 40),
 
-            /// FIND YOUR NEW LATEST PACKAGES SECTION
+            /// FIND YOUR NEW LATEST PACKAGES SECTION (filtered by date when selected)
             MembershipCarousel(
               searchQuery: searchQuery,
               selectedTrainer: selectedTrainer,
               filterFutureDate: filterFutureDate,
               isDarkMode: widget.isDarkMode,
-              categoryFilter: 'fitness', // Only show fitness packages
+              categoryFilter: 'fitness',
+              selectedDate: selectedDate,
             ),
 
             const SizedBox(height: 32),
           ],
         ),
+      );
+    },
       ),
     );
   }

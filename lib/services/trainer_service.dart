@@ -1,108 +1,101 @@
 import 'dart:io';
 import 'dart:convert';
 import 'api_service.dart';
+import '../config/app_config.dart';
 
 class TrainerService {
-  static const String baseUrl = 'https://outbox.nablean.com/api/v1';
+  static const String baseUrl = AppConfig.baseUrl;
   
   // 5.1 Create Trainer
+  // POST /api/v1/trainer/create-trainer (multipart/form-data)
+  // Required: email, first_name, emirates_id, phone_number, password
+  // Optional: last_name, gender, address, age, country (ObjectId), city (ObjectId),
+  //           specialization, experience (free text), experienceYear, serviceProvider (JSON array string)
+  // Optional files: profile_image, id_proof, certificate (one each)
   Future<Map<String, dynamic>?> createTrainer({
     File? profileImage,
-    String? profileImageUrl,
+    File? idProof,
+    File? certificate,
     required String email,
     required String firstName,
-    required String lastName,
+    String? lastName,
     required String phoneNumber,
     required String emiratesId,
-    required String gender,
-    required String address,
-    required int age,
-    required String country,
-    required String city,
-    required String specialization,
-    required String experience,
-    required int experienceYear,
+    String? gender,
+    String? address,
+    int? age,
+    String? country,
+    String? city,
+    String? specialization,
+    String? experience,
+    int? experienceYear,
     required String password,
-    required List<String> serviceProvider,
+    List<String>? serviceProvider,
   }) async {
     try {
-      // Build fields map - trim all string fields and ensure proper formatting
-      // Gender must be: "Male", "Female", "Others" (capitalized)
-      // Experience must be: "EXPERIENCE" or "FRESHER"
-      // Note: emirates_id is required by backend User model, even though not in API docs
       final trimmedEmiratesId = emiratesId.trim();
       if (trimmedEmiratesId.isEmpty) {
-        throw Exception('Emirates ID is required by the backend model');
+        throw Exception('Emirates ID is required');
       }
-      
+      // API: max 20 chars for emirates_id; send as-is (with or without dashes)
+      final emiratesIdValue = trimmedEmiratesId.length > 20
+          ? trimmedEmiratesId.substring(0, 20)
+          : trimmedEmiratesId;
+
       final fields = <String, dynamic>{
         'email': email.trim(),
         'first_name': firstName.trim(),
         'phone_number': phoneNumber.trim(),
-        'emirates_id': trimmedEmiratesId,
         'password': password,
+        'emirates_id': emiratesIdValue,
       };
-      
-      // Fix gender to match enum: "Male", "Female", "Others"
-      String normalizedGender = gender.trim();
-      if (normalizedGender.toLowerCase() == 'male') {
-        normalizedGender = 'Male';
-      } else if (normalizedGender.toLowerCase() == 'female') {
-        normalizedGender = 'Female';
-      } else if (normalizedGender.toLowerCase() == 'other' || normalizedGender.toLowerCase() == 'others') {
-        normalizedGender = 'Others';
-      }
-      
-      // Fix experience to match enum: "EXPERIENCE" or "FRESHER"
-      String normalizedExperience = experience.trim().toUpperCase();
-      if (normalizedExperience == 'YES' || normalizedExperience == 'EXPERIENCED' || normalizedExperience == 'HAS EXPERIENCE') {
-        normalizedExperience = 'EXPERIENCE';
-      } else if (normalizedExperience == 'NO' || normalizedExperience == 'FRESH' || normalizedExperience == 'NEW') {
-        normalizedExperience = 'FRESHER';
-      }
-      
-      // Add optional fields - send them if provided (backend handles undefined)
-      if (lastName.trim().isNotEmpty) {
+      if (lastName != null && lastName.trim().isNotEmpty) {
         fields['last_name'] = lastName.trim();
       }
-      if (normalizedGender.isNotEmpty) {
-        fields['gender'] = normalizedGender;
+      if (gender != null && gender.trim().isNotEmpty) {
+        String g = gender.trim();
+        if (g.toLowerCase() == 'male') g = 'Male';
+        else if (g.toLowerCase() == 'female') g = 'Female';
+        else if (g.toLowerCase() == 'other' || g.toLowerCase() == 'others') g = 'Others';
+        fields['gender'] = g;
       }
-      if (address.trim().isNotEmpty) {
+      if (address != null && address.trim().isNotEmpty) {
         fields['address'] = address.trim();
       }
-      if (age > 0) {
+      if (age != null && age > 0) {
         fields['age'] = age.toString();
       }
-      if (country.trim().isNotEmpty) {
+      if (country != null && country.trim().isNotEmpty) {
         fields['country'] = country.trim();
       }
-      if (city.trim().isNotEmpty) {
+      if (city != null && city.trim().isNotEmpty) {
         fields['city'] = city.trim();
       }
-      if (specialization.trim().isNotEmpty) {
+      if (specialization != null && specialization.trim().isNotEmpty) {
         fields['specialization'] = specialization.trim();
       }
-      if (normalizedExperience.isNotEmpty) {
-        fields['experience'] = normalizedExperience;
+      // Backend expects enum: EXPERIENCE | FRESHER
+      if (experience != null && experience.trim().isNotEmpty) {
+        final v = experience.trim().toUpperCase();
+        if (v == 'EXPERIENCE' || v == 'FRESHER') {
+          fields['experience'] = v;
+        }
       }
-      if (experienceYear >= 0) { // Allow 0 years of experience
+      if (experienceYear != null && experienceYear >= 0) {
         fields['experienceYear'] = experienceYear.toString();
       }
-      
-      // Handle serviceProvider - send as JSON string (empty array is valid)
-      fields['serviceProvider'] = jsonEncode(serviceProvider);
-      
-      if (profileImageUrl != null && profileImageUrl.isNotEmpty) {
-        fields['profileImageUrl'] = profileImageUrl;
-      }
-      
-      final files = profileImage != null ? {'profile_image': profileImage} : null;
+      fields['serviceProvider'] = jsonEncode(serviceProvider ?? []);
+
+      final files = <String, File>{};
+      if (profileImage != null) files['profile_image'] = profileImage;
+      if (idProof != null) files['id_proof'] = idProof;
+      if (certificate != null) files['certificate'] = certificate;
+      final filesMap = files.isEmpty ? null : files;
       
       final response = await ApiService.postMultipart(
         '$baseUrl/trainer/create-trainer',
         fields,
-        files: files,
+        files: filesMap,
         requireAuth: true,
       );
       
@@ -115,26 +108,29 @@ class TrainerService {
         }
         return responseData;
       } else {
-        // Extract error message from response - check multiple possible locations
-        String errorMsg = response['error'] ?? 
-                        response['data']?['message'] ?? 
-                        response['data']?['error'] ?? 
-                        response['data']?['msg'] ??
-                        (response['data'] is String ? response['data'] : null) ??
-                        'Failed to create trainer';
-        
-        // Check if error contains validation errors and extract them
-        if (response['data'] is Map) {
-          final data = response['data'] as Map;
-          if (data.containsKey('errors') && data['errors'] is Map) {
-            final errors = data['errors'] as Map;
-            final errorList = errors.entries.map((e) => '${e.key}: ${e.value}').join(', ');
-            if (errorList.isNotEmpty) {
-              errorMsg = errorList;
+        // Surface backend 400/validation message so user sees the real reason
+        String errorMsg = response['error'] ?? 'Failed to create trainer';
+        final data = response['data'];
+        if (data is Map) {
+          final msg = data['message'] ?? data['error'] ?? data['msg'];
+          if (msg != null && msg.toString().trim().isNotEmpty) {
+            errorMsg = msg.toString();
+          }
+          if (data['errors'] != null) {
+            final errors = data['errors'];
+            if (errors is Map) {
+              final parts = errors.entries.map((e) => '${e.key}: ${e.value}').toList();
+              if (parts.isNotEmpty) {
+                errorMsg = errorMsg + (errorMsg.endsWith('.') ? ' ' : '. ') + parts.join('; ');
+              }
+            } else if (errors is List) {
+              final parts = errors.map((e) => e.toString()).toList();
+              if (parts.isNotEmpty) {
+                errorMsg = errorMsg + (errorMsg.endsWith('.') ? ' ' : '. ') + parts.join('; ');
+              }
             }
           }
         }
-        
         throw Exception(errorMsg);
       }
     } catch (e) {
@@ -356,6 +352,78 @@ class TrainerService {
       }
     } catch (e) {
       throw Exception('Get trainers error: ${e.toString()}');
+    }
+  }
+
+  /// GET /trainer/get-trainerBy-id/:id
+  Future<Map<String, dynamic>?> getTrainerById(String trainerId) async {
+    try {
+      final response = await ApiService.get(
+        '$baseUrl/trainer/get-trainerBy-id/$trainerId',
+        requireAuth: true,
+      );
+      if (response['success'] == true) {
+        final data = response['data'];
+        if (data is Map) return Map<String, dynamic>.from(data);
+        if (data is Map && data['data'] is Map) return Map<String, dynamic>.from(data['data'] as Map);
+        return null;
+      }
+      throw Exception(response['error'] ?? 'Failed to get trainer');
+    } catch (e) {
+      throw Exception('Get trainer by ID error: ${e.toString()}');
+    }
+  }
+
+  /// DELETE /trainer/delete-trainer/:id
+  Future<Map<String, dynamic>?> deleteTrainer(String trainerId) async {
+    try {
+      final response = await ApiService.delete(
+        '$baseUrl/trainer/delete-trainer/$trainerId',
+        requireAuth: true,
+      );
+      if (response['success'] == true) return response['data'];
+      throw Exception(response['error'] ?? 'Failed to delete trainer');
+    } catch (e) {
+      throw Exception('Delete trainer error: ${e.toString()}');
+    }
+  }
+
+  /// GET /trainer/get-all-orders (Trainer's orders)
+  Future<List<dynamic>> getAllOrders() async {
+    try {
+      final response = await ApiService.get(
+        '$baseUrl/trainer/get-all-orders',
+        requireAuth: true,
+      );
+      if (response['success'] == true) {
+        final data = response['data'];
+        if (data is List) return data;
+        if (data is Map && data['data'] is List) return data['data'] as List;
+        if (data is Map && data['orders'] is List) return data['orders'] as List;
+        return [];
+      }
+      throw Exception(response['error'] ?? 'Failed to get orders');
+    } catch (e) {
+      throw Exception('Get all orders error: ${e.toString()}');
+    }
+  }
+
+  /// GET /trainer/get-all-order-by-id/:id
+  Future<Map<String, dynamic>?> getOrderById(String orderId) async {
+    try {
+      final response = await ApiService.get(
+        '$baseUrl/trainer/get-all-order-by-id/$orderId',
+        requireAuth: true,
+      );
+      if (response['success'] == true) {
+        final data = response['data'];
+        if (data is Map) return Map<String, dynamic>.from(data);
+        if (data is Map && data['data'] is Map) return Map<String, dynamic>.from(data['data'] as Map);
+        return null;
+      }
+      throw Exception(response['error'] ?? 'Failed to get order');
+    } catch (e) {
+      throw Exception('Get order by ID error: ${e.toString()}');
     }
   }
 }

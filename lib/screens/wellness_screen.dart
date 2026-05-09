@@ -4,6 +4,7 @@ import 'package:Outbox/services/purchase_status_service.dart';
 import 'package:Outbox/services/review_service.dart';
 import 'package:Outbox/services/subscription_service.dart';
 import 'package:Outbox/services/master_data_service.dart';
+import 'package:Outbox/services/trainer_service.dart';
 import 'package:Outbox/widgets/review_widget.dart';
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
@@ -20,6 +21,7 @@ import '../widgets/membership_card.dart';
 import '../widgets/membership_modal.dart';
 import '../widgets/todays_classes_list.dart';
 import '../models/membership_card_model.dart';
+import '../utils/card_display_utils.dart';
 import '../services/subscription_booking_service.dart';
 import '../services/notification_service.dart';
 
@@ -35,7 +37,22 @@ class WellnessScreen extends StatefulWidget {
 class _WellnessScreenState extends State<WellnessScreen> with WidgetsBindingObserver {
   int _refreshKey = 0; // Key to force stream refresh
   bool _hasInitialLoad = false;
-  
+  final _searchController = TextEditingController();
+  String _searchQuery = '';
+  String? _selectedTrainer; // Dropdown selection, like Fitness
+  DateTime? _selectedDate;
+  Future<bool>? _hasContentFuture;
+
+  Future<bool> _hasAnyContent() async {
+    try {
+      final memberships = await getWellnessMembershipsStream().first;
+      final classes = await fetchTodaysClasses(categoryFilter: 'wellness');
+      return memberships.isNotEmpty || classes.isNotEmpty;
+    } catch (_) {
+      return false;
+    }
+  }
+
   void _refreshData() {
     if (mounted) {
       setState(() {
@@ -48,6 +65,7 @@ class _WellnessScreenState extends State<WellnessScreen> with WidgetsBindingObse
   @override
   void initState() {
     super.initState();
+    _hasContentFuture = _hasAnyContent();
     WidgetsBinding.instance.addObserver(this);
     // Refresh data when screen first loads
     WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -60,6 +78,7 @@ class _WellnessScreenState extends State<WellnessScreen> with WidgetsBindingObse
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _searchController.dispose();
     super.dispose();
   }
   
@@ -219,9 +238,7 @@ class _WellnessScreenState extends State<WellnessScreen> with WidgetsBindingObse
             : trainer?.toString() ?? 'Unknown Trainer';
         
         final address = sub['Address'] is Map ? sub['Address'] : {};
-        final location = address['location']?.toString() ?? 
-                        address['addressLine1']?.toString() ?? 
-                        'Location TBD';
+        final location = formatCardLocation(address);
         
         final dates = sub['date'];
         String dateStr = '';
@@ -265,6 +282,21 @@ class _WellnessScreenState extends State<WellnessScreen> with WidgetsBindingObse
     }
   }
 
+  /// Get all trainers for dropdown (same as Fitness page)
+  Future<List<String>> _getTrainers() async {
+    try {
+      final trainerService = TrainerService();
+      final trainers = await trainerService.getAllTrainers();
+      return trainers.map((trainer) {
+        final firstName = trainer['first_name'] ?? '';
+        final lastName = trainer['last_name'] ?? '';
+        return '$firstName $lastName'.trim();
+      }).where((name) => name.isNotEmpty).toList();
+    } catch (e) {
+      return [];
+    }
+  }
+
   // Session descriptions map
   static const Map<String, String> sessionDescriptions = {
     "OUTCALM": "OutCalm is a deeply relaxing meditation and sound bath session designed to soothe your mind and body. Gentle breathwork, calming soundscapes, and subtle aromatherapy help you unwind, reduce stress, and leave feeling refreshed.\n\nOutCalm is perfect for all levels and offered in 30 or 45-minute sessions.",
@@ -287,7 +319,6 @@ class _WellnessScreenState extends State<WellnessScreen> with WidgetsBindingObse
     "OUTDREAM": "https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800&h=400&fit=crop&q=80", // Dream/visualization
   };
 
-  @override
   @override
   Widget build(BuildContext context) {
     // Brand Colors - Wellness (Brown/Gold: #AD8654)
@@ -397,7 +428,38 @@ class _WellnessScreenState extends State<WellnessScreen> with WidgetsBindingObse
 
     return Scaffold(
       backgroundColor: scaffoldBackground,
-      body: SingleChildScrollView(
+      body: FutureBuilder<bool>(
+        future: _hasContentFuture,
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.data != true) {
+            return Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.schedule, size: 64, color: accentColor.withOpacity(0.7)),
+                  const SizedBox(height: 24),
+                  Text(
+                    'Coming soon',
+                    style: GoogleFonts.montserrat(
+                      fontSize: 28,
+                      fontWeight: FontWeight.bold,
+                      color: headlineColor,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Text(
+                    'Classes and memberships for this section will appear here.',
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.inter(color: subTextColor, fontSize: 16),
+                  ),
+                ],
+              ),
+            );
+          }
+          return SingleChildScrollView(
         padding: const EdgeInsets.symmetric(horizontal: 24.0),
         child: Column(
           children: [
@@ -420,20 +482,149 @@ class _WellnessScreenState extends State<WellnessScreen> with WidgetsBindingObse
 
             const SizedBox(height: 36),
 
+            /// SEARCH & FILTERS (program/class name, trainer dropdown, date picker)
+            Container(
+              decoration: BoxDecoration(
+                color: widget.isDarkMode ? Colors.grey[850] : Colors.white,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              padding: const EdgeInsets.all(12),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        flex: 3,
+                        child: TextField(
+                          controller: _searchController,
+                          onChanged: (value) => setState(() => _searchQuery = value),
+                          decoration: InputDecoration(
+                            border: InputBorder.none,
+                            hintText: "Search by program/class name",
+                            hintStyle: GoogleFonts.inter(
+                              color: widget.isDarkMode ? Colors.white54 : Colors.grey,
+                            ),
+                          ),
+                          style: GoogleFonts.inter(
+                            color: widget.isDarkMode ? Colors.white : const Color(0xFF353535),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Icon(Icons.search, color: accentColor),
+                    ],
+                  ),
+                  const Divider(height: 1),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: FutureBuilder<List<String>>(
+                          future: _getTrainers(),
+                          builder: (context, snapshot) {
+                            final trainers = snapshot.data ?? [];
+                            final onSurface = widget.isDarkMode ? Colors.white : const Color(0xFF353535);
+                            return DropdownButton<String>(
+                              hint: Text(
+                                "Select Trainer",
+                                style: GoogleFonts.inter(color: onSurface),
+                              ),
+                              value: _selectedTrainer,
+                              isExpanded: true,
+                              dropdownColor: widget.isDarkMode ? Colors.grey[850] : Colors.white,
+                              style: GoogleFonts.inter(color: onSurface),
+                              items: trainers
+                                  .map((trainer) => DropdownMenuItem(
+                                        value: trainer,
+                                        child: Text(
+                                          trainer,
+                                          style: GoogleFonts.inter(color: onSurface),
+                                        ),
+                                      ))
+                                  .toList(),
+                              onChanged: (value) {
+                                setState(() => _selectedTrainer = value);
+                              },
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      InkWell(
+                        onTap: () async {
+                          final picked = await showDatePicker(
+                            context: context,
+                            initialDate: _selectedDate ?? DateTime.now(),
+                            firstDate: DateTime.now().subtract(const Duration(days: 365)),
+                            lastDate: DateTime(2100),
+                          );
+                          if (picked != null) {
+                            setState(() {
+                              _selectedDate = DateTime(picked.year, picked.month, picked.day);
+                            });
+                          }
+                        },
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.calendar_today, color: accentColor, size: 20),
+                            const SizedBox(width: 4),
+                            Text(
+                              _selectedDate == null
+                                  ? "Pick date"
+                                  : "${_selectedDate!.month}/${_selectedDate!.day}/${_selectedDate!.year}",
+                              style: GoogleFonts.inter(
+                                color: widget.isDarkMode ? Colors.white : const Color(0xFF353535),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: () {
+                        _searchController.clear();
+                        setState(() {
+                          _searchQuery = '';
+                          _selectedTrainer = null;
+                          _selectedDate = null;
+                        });
+                      },
+                      icon: Icon(Icons.refresh, size: 18, color: accentColor),
+                      label: Text(
+                        'Reset filters',
+                        style: GoogleFonts.inter(color: accentColor, fontSize: 13),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+
             /// ----------------------------------------
-            /// ICON GRID ONLY (NO SEARCH / NO LOCATION)
+            /// TOP WELLNESS SESSIONS (brand color #AD8654)
             /// ----------------------------------------
             FitnessSessionsGrid(
               sessions: sessions,
               isDarkMode: widget.isDarkMode,
+              sectionTitle: 'Top Wellness Sessions',
+              accentColor: accentColor, // #AD8654
             ),
 
             const SizedBox(height: 28),
 
-            /// TODAY'S CLASSES SECTION
+            /// TODAY'S CLASSES SECTION (filtered by date and search when set)
             TodaysClassesList(
               isDarkMode: widget.isDarkMode,
-              categoryFilter: 'wellness', // Only show wellness classes
+              categoryFilter: 'wellness',
+              selectedDate: _selectedDate,
+              searchQuery: _searchQuery,
+              trainerQuery: _selectedTrainer ?? '',
             ),
 
             const SizedBox(height: 32),
@@ -474,17 +665,41 @@ class _WellnessScreenState extends State<WellnessScreen> with WidgetsBindingObse
                 final allMemberships = snapshot.data!;
                 NotificationService.scheduleUpcomingSessions(allMemberships);
 
+                // Apply client-side filters: program/class name, trainer (dropdown), and selected date
+                final filtered = allMemberships.where((card) {
+                  final matchesName = _searchQuery.isEmpty ||
+                      card.title.toLowerCase().contains(_searchQuery.toLowerCase());
+                  final matchesTrainer = _selectedTrainer == null ||
+                      card.mentor == _selectedTrainer;
+
+                  DateTime? cardDate;
+                  try {
+                    cardDate = DateTime.tryParse(card.date);
+                  } catch (_) {
+                    cardDate = null;
+                  }
+                  bool matchesDate = true;
+                  if (_selectedDate != null && cardDate != null) {
+                    matchesDate = cardDate.year == _selectedDate!.year &&
+                        cardDate.month == _selectedDate!.month &&
+                        cardDate.day == _selectedDate!.day;
+                  }
+
+                  return matchesName && matchesTrainer && matchesDate;
+                }).toList();
+
                 return SingleChildScrollView(
                   scrollDirection: Axis.horizontal,
                   padding: const EdgeInsets.symmetric(vertical: 4),
                   child: Row(
-                    children: allMemberships
+                    children: filtered
                         .map(
                           (card) => MembershipCard(
                             data: card,
                             onTap: () {
                               MembershipModal.show(context, card, widget.isDarkMode);
                             },
+                            cardBackgroundColor: widget.isDarkMode ? const Color(0xFF1E293B) : null,
                           ),
                         )
                         .toList(),
@@ -495,18 +710,21 @@ class _WellnessScreenState extends State<WellnessScreen> with WidgetsBindingObse
 
             const SizedBox(height: 40),
 
-            /// FIND YOUR NEW LATEST PACKAGES SECTION
+            /// FIND YOUR NEW LATEST PACKAGES SECTION (filtered by date and search)
             MembershipCarousel(
-              searchQuery: '',
-              selectedTrainer: null,
+              searchQuery: _searchQuery,
+              selectedTrainer: _selectedTrainer,
               filterFutureDate: false,
               isDarkMode: widget.isDarkMode,
-              categoryFilter: 'wellness', // Only show wellness packages
+              categoryFilter: 'wellness',
+              selectedDate: _selectedDate,
             ),
 
             const SizedBox(height: 32),
           ],
         ),
+      );
+    },
       ),
     );
   }

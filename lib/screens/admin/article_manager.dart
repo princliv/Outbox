@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import '../../services/admin_service.dart';
 import '../../services/api_service.dart';
+import '../../widgets/admin/admin_theme.dart';
 
 class ArticleManager extends StatefulWidget {
   @override
@@ -14,10 +15,8 @@ class _ArticleManagerState extends State<ArticleManager> {
   
   final _titleController = TextEditingController();
   final _descriptionController = TextEditingController();
-  final _imageUrlController = TextEditingController();
   
   File? _selectedImage;
-  bool _useImageUrl = false;
   List<dynamic> _articles = [];
   bool _isLoading = false;
 
@@ -84,20 +83,71 @@ class _ArticleManagerState extends State<ArticleManager> {
                   child: Container(
                     height: 150,
                     width: double.infinity,
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Colors.grey),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
+                    decoration: AdminTheme.uploadSectionDecoration(context),
                     child: editImage != null
-                        ? Image.file(editImage!, fit: BoxFit.cover)
+                        ? Stack(
+                            fit: StackFit.expand,
+                            children: [
+                              Image.file(editImage!, fit: BoxFit.cover),
+                              Positioned(
+                                top: 8,
+                                right: 8,
+                                child: Material(
+                                  color: AdminTheme.editOverlayColor(context),
+                                  borderRadius: BorderRadius.circular(20),
+                                  child: IconButton(
+                                    icon: const Icon(Icons.edit, color: Colors.white, size: 20),
+                                    onPressed: () async {
+                                      final picker = ImagePicker();
+                                      final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+                                      if (pickedFile != null) {
+                                        setDialogState(() {
+                                          editImage = File(pickedFile.path);
+                                          editImageUrl = null;
+                                        });
+                                      }
+                                    },
+                                    padding: const EdgeInsets.all(6),
+                                  ),
+                                ),
+                              ),
+                            ],
+                          )
                         : editImageUrl != null
-                            ? Image.network(editImageUrl!, fit: BoxFit.cover)
-                            : const Column(
+                            ? Stack(
+                                fit: StackFit.expand,
+                                children: [
+                                  Image.network(editImageUrl!, fit: BoxFit.cover),
+                                  Positioned(
+                                    top: 8,
+                                    right: 8,
+                                    child: Material(
+                                      color: AdminTheme.editOverlayColor(context),
+                                      borderRadius: BorderRadius.circular(20),
+                                      child: IconButton(
+                                        icon: const Icon(Icons.edit, color: Colors.white, size: 20),
+                                        onPressed: () async {
+                                          final picker = ImagePicker();
+                                          final pickedFile = await picker.pickImage(source: ImageSource.gallery);
+                                          if (pickedFile != null) {
+                                            setDialogState(() {
+                                              editImage = File(pickedFile.path);
+                                              editImageUrl = null;
+                                            });
+                                          }
+                                        },
+                                        padding: const EdgeInsets.all(6),
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              )
+                            : Column(
                                 mainAxisAlignment: MainAxisAlignment.center,
                                 children: [
-                                  Icon(Icons.add_photo_alternate, size: 48),
-                                  SizedBox(height: 8),
-                                  Text('Tap to select image'),
+                                  Icon(Icons.add_photo_alternate, size: 48, color: AdminTheme.fieldTextMuted(context)),
+                                  const SizedBox(height: 8),
+                                  Text('Tap to select image', style: TextStyle(color: AdminTheme.fieldTextMuted(context))),
                                 ],
                               ),
                   ),
@@ -105,18 +155,12 @@ class _ArticleManagerState extends State<ArticleManager> {
                 const SizedBox(height: 16),
                 TextField(
                   controller: editTitleController,
-                  decoration: const InputDecoration(
-                    labelText: 'Title',
-                    border: OutlineInputBorder(),
-                  ),
+                  decoration: AdminTheme.inputDecoration(context, labelText: 'Title'),
                 ),
                 const SizedBox(height: 16),
                 TextField(
                   controller: editDescriptionController,
-                  decoration: const InputDecoration(
-                    labelText: 'Description',
-                    border: OutlineInputBorder(),
-                  ),
+                  decoration: AdminTheme.inputDecoration(context, labelText: 'Description'),
                   maxLines: 5,
                 ),
               ],
@@ -172,9 +216,9 @@ class _ArticleManagerState extends State<ArticleManager> {
       return;
     }
     
-    if (!_useImageUrl && _selectedImage == null) {
+    if (_selectedImage == null) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please select an image or provide an image URL')),
+        const SnackBar(content: Text('Please upload an image')),
       );
       return;
     }
@@ -182,8 +226,8 @@ class _ArticleManagerState extends State<ArticleManager> {
     setState(() => _isLoading = true);
     try {
       await _adminService.createArticle(
-        image: _useImageUrl ? null : _selectedImage,
-        imageUrl: _useImageUrl ? _imageUrlController.text.trim() : null,
+        image: _selectedImage,
+        imageUrl: null,
         title: _titleController.text,
         description: _descriptionController.text.isEmpty ? null : _descriptionController.text,
       );
@@ -194,11 +238,7 @@ class _ArticleManagerState extends State<ArticleManager> {
       
       _titleController.clear();
       _descriptionController.clear();
-      _imageUrlController.clear();
-      setState(() {
-        _selectedImage = null;
-        _useImageUrl = false;
-      });
+      setState(() => _selectedImage = null);
       _loadArticles();
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -228,120 +268,51 @@ class _ArticleManagerState extends State<ArticleManager> {
                     style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
                   const SizedBox(height: 16),
-                  // Toggle between file upload and URL
-                  Row(
-                    children: [
-                      Expanded(
-                        child: RadioListTile<bool>(
-                          title: const Text('Upload File'),
-                          value: false,
-                          groupValue: _useImageUrl,
-                          onChanged: (value) {
-                            setState(() {
-                              _useImageUrl = false;
-                              _imageUrlController.clear();
-                            });
-                          },
-                        ),
-                      ),
-                      Expanded(
-                        child: RadioListTile<bool>(
-                          title: const Text('Image URL'),
-                          value: true,
-                          groupValue: _useImageUrl,
-                          onChanged: (value) {
-                            setState(() {
-                              _useImageUrl = true;
-                              _selectedImage = null;
-                            });
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 8),
-                  if (!_useImageUrl)
-                    GestureDetector(
-                      onTap: _pickImage,
-                      child: Container(
-                        height: 150,
-                        width: double.infinity,
-                        decoration: BoxDecoration(
-                          border: Border.all(color: Colors.grey),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
-                        child: _selectedImage != null
-                            ? Image.file(_selectedImage!, fit: BoxFit.cover)
-                            : const Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(Icons.add_photo_alternate, size: 48),
-                                  SizedBox(height: 8),
-                                  Text('Tap to select image'),
-                                ],
-                              ),
-                      ),
-                    )
-                  else
-                    Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        TextField(
-                          controller: _imageUrlController,
-                          decoration: const InputDecoration(
-                            labelText: 'Image URL *',
-                            hintText: 'https://example.com/image.jpg',
-                            prefixIcon: Icon(Icons.link),
-                            border: OutlineInputBorder(),
-                          ),
-                          onChanged: (value) => setState(() {}), // Refresh to show preview
-                        ),
-                        const SizedBox(height: 8),
-                        if (_imageUrlController.text.isNotEmpty)
-                          Container(
-                            height: 150,
-                            width: double.infinity,
-                            decoration: BoxDecoration(
-                              border: Border.all(color: Colors.grey),
-                              borderRadius: BorderRadius.circular(8),
-                            ),
-                            child: ClipRRect(
-                              borderRadius: BorderRadius.circular(8),
-                              child: Image.network(
-                                _imageUrlController.text,
-                                fit: BoxFit.cover,
-                                errorBuilder: (context, error, stackTrace) => const Column(
-                                  mainAxisAlignment: MainAxisAlignment.center,
-                                  children: [
-                                    Icon(Icons.error, size: 48, color: Colors.red),
-                                    SizedBox(height: 8),
-                                    Text('Invalid image URL', style: TextStyle(color: Colors.red)),
-                                  ],
+                  GestureDetector(
+                    onTap: _pickImage,
+                    child: Container(
+                      height: 150,
+                      width: double.infinity,
+                      decoration: AdminTheme.uploadSectionDecoration(context),
+                      child: _selectedImage != null
+                          ? Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                Image.file(_selectedImage!, fit: BoxFit.cover),
+                                Positioned(
+                                  top: 8,
+                                  right: 8,
+                                  child: Material(
+                                    color: AdminTheme.editOverlayColor(context),
+                                    borderRadius: BorderRadius.circular(20),
+                                    child: IconButton(
+                                      icon: const Icon(Icons.edit, color: Colors.white, size: 20),
+                                      onPressed: _pickImage,
+                                      padding: const EdgeInsets.all(6),
+                                    ),
+                                  ),
                                 ),
-                                loadingBuilder: (context, child, loadingProgress) {
-                                  if (loadingProgress == null) return child;
-                                  return const Center(child: CircularProgressIndicator());
-                                },
-                              ),
+                              ],
+                            )
+                          : Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.add_photo_alternate, size: 48, color: AdminTheme.fieldTextMuted(context)),
+                                const SizedBox(height: 8),
+                                Text('Tap to upload image', style: TextStyle(color: AdminTheme.fieldTextMuted(context))),
+                              ],
                             ),
-                          ),
-                      ],
                     ),
+                  ),
                   const SizedBox(height: 16),
                   TextField(
                     controller: _titleController,
-                    decoration: const InputDecoration(
-                      labelText: 'Title *',
-                      border: OutlineInputBorder(),
-                    ),
+                    decoration: AdminTheme.inputDecoration(context, labelText: 'Title *'),
                   ),
                   const SizedBox(height: 16),
                   TextField(
                     controller: _descriptionController,
-                    decoration: const InputDecoration(
-                      labelText: 'Description (Optional)',
-                      border: OutlineInputBorder(),
-                    ),
+                    decoration: AdminTheme.inputDecoration(context, labelText: 'Description (Optional)'),
                     maxLines: 5,
                   ),
                   const SizedBox(height: 16),
@@ -457,7 +428,6 @@ class _ArticleManagerState extends State<ArticleManager> {
   void dispose() {
     _titleController.dispose();
     _descriptionController.dispose();
-    _imageUrlController.dispose();
     super.dispose();
   }
 }

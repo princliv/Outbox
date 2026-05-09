@@ -1,9 +1,10 @@
 import 'dart:io';
 import 'dart:convert';
 import 'api_service.dart';
+import '../config/app_config.dart';
 
 class SubscriptionService {
-  static const String baseUrl = 'https://outbox.nablean.com/api/v1';
+  static const String baseUrl = AppConfig.baseUrl;
   
   // 14.1 Create Subscription
   Future<Map<String, dynamic>?> createSubscription({
@@ -34,7 +35,7 @@ class SubscriptionService {
         'date': jsonEncode(date),
         'startTime': startTime,
         'endTime': endTime,
-        'Address': addressId, // LocationMaster ObjectId (not JSON)
+        'Address': addressId, // ONLY LocationMaster _id (do not send city name, full object, or address string)
         'isSingleClass': isSingleClass.toString(),
         if (mediaUrl != null && mediaUrl.isNotEmpty) 'mediaUrl': mediaUrl,
       };
@@ -59,19 +60,39 @@ class SubscriptionService {
   }
   
   // 14.2 Update Subscription
+  /// Send all fields the backend may require (same as create) to avoid "Missing required field".
   Future<Map<String, dynamic>?> updateSubscription({
     required String subscriptionId,
     File? media,
     String? name,
     double? price,
     String? description,
+    String? categoryId,
+    String? trainer,
+    String? sessionType,
+    List<String>? date,
+    String? startTime,
+    String? endTime,
+    String? addressId,
+    bool? isActive,
+    bool? isSingleClass,
   }) async {
     try {
-      final fields = <String, dynamic>{};
-      if (name != null) fields['name'] = name;
-      if (price != null) fields['price'] = price.toString();
-      if (description != null) fields['description'] = description;
-      
+      final fields = <String, dynamic>{
+        'name': name ?? '',
+        'price': (price ?? 0).toString(),
+        'description': description ?? '',
+      };
+      if (categoryId != null && categoryId.isNotEmpty) fields['categoryId'] = categoryId;
+      if (trainer != null && trainer.isNotEmpty) fields['trainer'] = trainer;
+      if (sessionType != null && sessionType.isNotEmpty) fields['sessionType'] = sessionType;
+      if (date != null && date.isNotEmpty) fields['date'] = jsonEncode(date);
+      if (startTime != null && startTime.isNotEmpty) fields['startTime'] = startTime;
+      if (endTime != null && endTime.isNotEmpty) fields['endTime'] = endTime;
+      if (addressId != null && addressId.isNotEmpty) fields['Address'] = addressId;
+      if (isActive != null) fields['isActive'] = isActive.toString();
+      if (isSingleClass != null) fields['isSingleClass'] = isSingleClass.toString();
+
       final files = media != null ? {'media': media} : null;
       
       final response = await ApiService.putMultipart(

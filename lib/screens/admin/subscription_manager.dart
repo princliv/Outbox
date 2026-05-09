@@ -6,8 +6,14 @@ import '../../services/subscription_service.dart';
 import '../../services/master_data_service.dart';
 import '../../services/trainer_service.dart';
 import '../../widgets/searchable_dropdown.dart';
+import '../../widgets/admin/admin_theme.dart';
 
 class SubscriptionManager extends StatefulWidget {
+  /// Title for this tab: e.g. 'Programs' or 'Classes'.
+  final String title;
+
+  const SubscriptionManager({super.key, this.title = 'Subscriptions'});
+
   @override
   State<SubscriptionManager> createState() => _SubscriptionManagerState();
 }
@@ -30,26 +36,50 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
   String? _selectedSessionTypeId;
   String? _selectedAddressId; // LocationMaster ID
   List<String> _selectedDates = [];
+  DateTime? _rangeStartDate;
+  DateTime? _rangeEndDate;
   bool _isActive = true;
   bool _isSingleClass = false;
-  
+  /// When non-null, form is in edit mode and pre-filled with this subscription.
+  Map<String, dynamic>? _editingSubscription;
+
   List<dynamic> _categories = [];
   List<dynamic> _trainers = [];
   List<dynamic> _sessions = [];
   List<dynamic> _locations = []; // LocationMasters
+  List<dynamic> _allSubscriptions = [];
   List<dynamic> _subscriptions = [];
   bool _isLoading = false;
   int _page = 1;
-  final int _limit = 10;
+  final int _limit = 100;
 
   @override
   void initState() {
     super.initState();
+    if (widget.title == 'Classes') _isSingleClass = true;
     _loadCategories();
     _loadTrainers();
     _loadSessions();
     _loadLocations();
     _loadSubscriptions();
+    _searchController.addListener(_applySearchFilter);
+  }
+
+  void _applySearchFilter() {
+    final query = _searchController.text.trim().toLowerCase();
+    if (query.isEmpty) {
+      setState(() => _subscriptions = List<dynamic>.from(_allSubscriptions));
+      return;
+    }
+    setState(() {
+      _subscriptions = _allSubscriptions.where((raw) {
+        final s = raw is Map ? Map<String, dynamic>.from(raw.map((k, v) => MapEntry(k.toString(), v))) : <String, dynamic>{};
+        final name = (s['name']?.toString() ?? '').toLowerCase();
+        final desc = (s['description']?.toString() ?? '').toLowerCase();
+        final price = (s['price']?.toString() ?? '').toLowerCase();
+        return name.contains(query) || desc.contains(query) || price.contains(query);
+      }).toList();
+    });
   }
 
   Future<void> _loadCategories() async {
@@ -100,9 +130,19 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
         setState(() {
           _locations = locations;
         });
+        if (locations.isEmpty) {
+          debugPrint('SubscriptionManager: Location dropdown is empty after load.');
+        } else {
+          debugPrint('SubscriptionManager: Loaded ${locations.length} location(s) for dropdown.');
+        }
       }
     } catch (e) {
-      // Handle error silently
+      debugPrint('SubscriptionManager: _loadLocations error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to load locations: ${e.toString().replaceAll('Exception: ', '')}')),
+        );
+      }
     }
   }
 
@@ -119,15 +159,33 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
       );
       if (mounted) {
         setState(() {
-          _subscriptions = result?['subscriptions'] ?? result?['data'] ?? [];
+          final r = result as dynamic;
+          List<dynamic> raw = [];
+          if (r == null) {
+            raw = [];
+          } else if (r is List) {
+            raw = List<dynamic>.from(r);
+          } else if (r is Map) {
+            final data = r['subscriptions'] ?? r['data'] ?? [];
+            raw = data is List ? List<dynamic>.from(data) : [];
+          }
+          // Filter by type: Programs = multi-day, Classes = one-day (isSingleClass)
+          if (widget.title == 'Programs') {
+            _allSubscriptions = raw.where((s) => _isSubscriptionSingleClass(s) != true).toList();
+          } else if (widget.title == 'Classes') {
+            _allSubscriptions = raw.where((s) => _isSubscriptionSingleClass(s) == true).toList();
+          } else {
+            _allSubscriptions = raw;
+          }
           _isLoading = false;
         });
+        _applySearchFilter();
       }
     } catch (e) {
       if (mounted) {
         setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading subscriptions: ${e.toString()}')),
+          SnackBar(content: Text('Error loading subscriptions: ${_errorMessage(e)}')),
         );
       }
     }
@@ -170,119 +228,175 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
     }
   }
 
-  Future<void> _showEditDialog(Map<String, dynamic> subscription) async {
-    final editNameController = TextEditingController(text: subscription['name'] ?? '');
-    final editPriceController = TextEditingController(text: subscription['price']?.toString() ?? '');
-    final editDescriptionController = TextEditingController(text: subscription['description'] ?? '');
-    File? editMedia;
-    String? editMediaUrl = subscription['media'] ?? subscription['mediaUrl'];
+  /// Clean exception message for SnackBar: strip "Exception: " and wrapper text so backend message is visible.
+  static String _errorMessage(dynamic e) {
+    String msg = e.toString().trim();
+    if (msg.startsWith('Exception: ')) msg = msg.substring(11).trim();
+    const prefixes = [
+      'Update subscription error: ',
+      'Create subscription error: ',
+      'Delete subscription error: ',
+      'Get all subscriptions error: ',
+    ];
+    for (final p in prefixes) {
+      if (msg.startsWith(p)) {
+        msg = msg.substring(p.length).trim();
+        break;
+      }
+    }
+    return msg.isEmpty ? 'Something went wrong' : msg;
+  }
 
-    await showDialog(
-      context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          title: const Text('Edit Subscription'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                GestureDetector(
-                  onTap: () async {
-                    final picker = ImagePicker();
-                    final pickedFile = await picker.pickImage(source: ImageSource.gallery);
-                    if (pickedFile != null) {
-                      setDialogState(() {
-                        editMedia = File(pickedFile.path);
-                        editMediaUrl = null;
-                      });
-                    }
-                  },
-                  child: Container(
-                    height: 150,
-                    width: double.infinity,
-                    decoration: BoxDecoration(
-                      border: Border.all(color: Colors.grey),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: editMedia != null
-                        ? Image.file(editMedia!, fit: BoxFit.cover)
-                        : editMediaUrl != null
-                            ? Image.network(editMediaUrl!, fit: BoxFit.cover)
-                            : const Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Icon(Icons.add_photo_alternate, size: 48),
-                                  SizedBox(height: 8),
-                                  Text('Tap to select media'),
-                                ],
-                              ),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: editNameController,
-                  decoration: const InputDecoration(
-                    labelText: 'Name',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: editPriceController,
-                  decoration: const InputDecoration(
-                    labelText: 'Price',
-                    border: OutlineInputBorder(),
-                  ),
-                  keyboardType: TextInputType.number,
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: editDescriptionController,
-                  decoration: const InputDecoration(
-                    labelText: 'Description',
-                    border: OutlineInputBorder(),
-                  ),
-                  maxLines: 3,
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                try {
-                  await _subscriptionService.updateSubscription(
-                    subscriptionId: subscription['_id'] ?? subscription['id'] ?? '',
-                    media: editMedia,
-                    name: editNameController.text.isEmpty ? null : editNameController.text,
-                    price: editPriceController.text.isEmpty ? null : double.tryParse(editPriceController.text),
-                    description: editDescriptionController.text.isEmpty ? null : editDescriptionController.text,
-                  );
-                  if (context.mounted) {
-                    Navigator.pop(context);
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Subscription updated successfully')),
-                    );
-                    _loadSubscriptions();
-                  }
-                } catch (e) {
-                  if (context.mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(content: Text('Error: ${e.toString()}')),
-                    );
-                  }
-                }
-              },
-              child: const Text('Update'),
-            ),
-          ],
-        ),
-      ),
-    );
+  /// Resolve subscription ID from API response (supports _id, id, subscriptionId, nested data).
+  static String _getSubscriptionId(dynamic subscription) {
+    if (subscription == null) return '';
+    if (subscription is Map) {
+      final map = Map<String, dynamic>.from(subscription);
+      final id = map['_id'] ?? map['id'] ?? map['subscriptionId'];
+      if (id != null && id.toString().trim().isNotEmpty) return id.toString().trim();
+      final data = map['data'];
+      if (data is Map) {
+        final dataMap = Map<String, dynamic>.from(data);
+        final dataId = dataMap['_id'] ?? dataMap['id'];
+        if (dataId != null && dataId.toString().trim().isNotEmpty) return dataId.toString().trim();
+      }
+    }
+    return '';
+  }
+
+  /// Whether the subscription is a single-class (one-day) item.
+  static bool? _isSubscriptionSingleClass(dynamic subscription) {
+    if (subscription is! Map) return null;
+    final v = subscription['isSingleClass'];
+    if (v == null) return null;
+    if (v is bool) return v;
+    if (v is String) return v.toLowerCase() == 'true';
+    return null;
+  }
+
+  /// Get id from a subscription field that may be an object (with _id) or a string.
+  static String? _getIdFromField(dynamic value) {
+    if (value == null) return null;
+    if (value is Map) {
+      final id = value['_id'] ?? value['id'];
+      return id?.toString().trim();
+    }
+    final s = value.toString().trim();
+    return s.isEmpty ? null : s;
+  }
+
+  /// Populate the create form with subscription data so the same form is used for editing.
+  void _populateFormFromSubscription(Map<String, dynamic> subscription) {
+    _nameController.text = subscription['name']?.toString() ?? '';
+    _priceController.text = subscription['price']?.toString() ?? '';
+    _descriptionController.text = subscription['description']?.toString() ?? '';
+    _selectedCategoryId = _getIdFromField(subscription['categoryId']) ?? subscription['categoryId']?.toString();
+    _selectedTrainerId = _getIdFromField(subscription['trainer']);
+    _selectedSessionTypeId = _getIdFromField(subscription['sessionType']);
+    _selectedAddressId = _getIdFromField(subscription['Address']) ?? _getIdFromField(subscription['addressId']);
+    _startTimeController.text = subscription['startTime']?.toString() ?? '';
+    _endTimeController.text = subscription['endTime']?.toString() ?? '';
+    _isActive = subscription['isActive'] != false;
+    _isSingleClass = subscription['isSingleClass'] == true;
+    final dateList = subscription['date'];
+    if (dateList is List) {
+      _selectedDates = dateList.map((e) => e?.toString() ?? '').where((s) => s.isNotEmpty).toList();
+      _selectedDates.sort();
+    } else {
+      _selectedDates = [];
+    }
+    _selectedMedia = null; // keep existing image shown via URL in UI when editing
+    _rangeStartDate = null;
+    _rangeEndDate = null;
+    if (_selectedCategoryId != null) {
+      _masterDataService.getSessionsByCategoryId(_selectedCategoryId!).then((sessions) {
+        if (mounted) setState(() => _sessions = sessions);
+      });
+    }
+  }
+
+  void _clearForm() {
+    _nameController.clear();
+    _priceController.clear();
+    _descriptionController.clear();
+    _startTimeController.clear();
+    _endTimeController.clear();
+    setState(() {
+      _selectedMedia = null;
+      _selectedCategoryId = null;
+      _selectedTrainerId = null;
+      _selectedSessionTypeId = null;
+      _selectedAddressId = null;
+      _selectedDates = [];
+      _editingSubscription = null;
+      _rangeStartDate = null;
+      _rangeEndDate = null;
+      _isSingleClass = widget.title == 'Classes';
+    });
+  }
+
+  Future<void> _updateSubscriptionFromForm() async {
+    final sub = _editingSubscription;
+    if (sub == null) return;
+    final subscriptionId = _getSubscriptionId(sub);
+    if (subscriptionId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cannot update: subscription ID not found')),
+      );
+      return;
+    }
+    if (_nameController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Name is required')),
+      );
+      return;
+    }
+    setState(() => _isLoading = true);
+    try {
+      await _subscriptionService.updateSubscription(
+        subscriptionId: subscriptionId,
+        media: _selectedMedia,
+        name: _nameController.text.trim(),
+        price: double.tryParse(_priceController.text) ?? double.tryParse(sub['price']?.toString() ?? '') ?? 0,
+        description: _descriptionController.text.trim(),
+        categoryId: _selectedCategoryId,
+        trainer: _selectedTrainerId,
+        sessionType: _selectedSessionTypeId,
+        date: _selectedDates.isEmpty ? null : _selectedDates,
+        startTime: _startTimeController.text.trim().isEmpty ? null : _startTimeController.text.trim(),
+        endTime: _endTimeController.text.trim().isEmpty ? null : _endTimeController.text.trim(),
+        addressId: _selectedAddressId,
+        isActive: _isActive,
+        isSingleClass: _isSingleClass,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Subscription updated successfully')),
+        );
+        _clearForm();
+        _loadSubscriptions();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error updating: ${_errorMessage(e)}')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  /// Opens the same form as create, pre-filled with subscription data (edit mode).
+  void _showEditDialog(Map<String, dynamic> subscription) {
+    if (_getSubscriptionId(subscription).isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cannot edit: subscription ID not found')),
+      );
+      return;
+    }
+    _populateFormFromSubscription(subscription);
+    setState(() => _editingSubscription = subscription);
   }
 
   Future<void> _deleteSubscription(Map<String, dynamic> subscription) async {
@@ -296,9 +410,9 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
             onPressed: () => Navigator.pop(context, false),
             child: const Text('Cancel'),
           ),
-          ElevatedButton(
+          FilledButton(
             onPressed: () => Navigator.pop(context, true),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
             child: const Text('Delete'),
           ),
         ],
@@ -309,8 +423,16 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
       if (!mounted) return;
       setState(() => _isLoading = true);
       try {
+        final id = _getSubscriptionId(subscription);
+        if (id.isEmpty) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Cannot delete: subscription ID not found')),
+          );
+          setState(() => _isLoading = false);
+          return;
+        }
         await _subscriptionService.deleteSubscription(
-          subscriptionId: subscription['_id'] ?? subscription['id'] ?? '',
+          subscriptionId: id,
         );
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
@@ -322,7 +444,7 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
         if (mounted) {
           setState(() => _isLoading = false);
           ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(content: Text('Error deleting subscription: ${e.toString()}')),
+            SnackBar(content: Text('Error deleting subscription: ${_errorMessage(e)}')),
           );
         }
       }
@@ -345,7 +467,7 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
       return;
     }
 
-    // Validate dates: 1 date for single class, 2 dates for multi-class
+    // Validate dates: single class = exactly 1 date; multi-day = at least 2 dates (start and end range)
     if (_isSingleClass && _selectedDates.length != 1) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Single class must have exactly one date')),
@@ -353,15 +475,18 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
       return;
     }
 
-    if (!_isSingleClass && _selectedDates.length != 2) {
+    if (!_isSingleClass && _selectedDates.length < 2) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Multi-class must have exactly two dates (start and end)')),
+        const SnackBar(content: Text('Multi-day event needs at least two dates (e.g. start and end)')),
       );
       return;
     }
 
     if (!mounted) return;
     setState(() => _isLoading = true);
+    // Address must be LocationMaster _id only (not city name, full object, or address string).
+    final addressId = _selectedAddressId!;
+    debugPrint('SubscriptionManager: Creating subscription with Address (LocationMaster _id): $addressId');
     try {
       await _subscriptionService.createSubscription(
         media: _selectedMedia,
@@ -375,7 +500,7 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
         date: _selectedDates,
         startTime: _startTimeController.text,
         endTime: _endTimeController.text,
-        addressId: _selectedAddressId!,
+        addressId: addressId,
         isSingleClass: _isSingleClass,
       );
       
@@ -402,7 +527,7 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error creating subscription: ${e.toString()}')),
+          SnackBar(content: Text('Error creating subscription: ${_errorMessage(e)}')),
         );
       }
     } finally {
@@ -419,112 +544,133 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Card(
-            elevation: 2,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            child: Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Colors.white, Colors.grey.shade50],
-                ),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.purple.shade50,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Icon(Icons.fitness_center, color: Colors.purple, size: 28),
-                        ),
-                        const SizedBox(width: 16),
-                        const Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Create Subscription',
-                                style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                'Add a new course or class',
-                                style: TextStyle(fontSize: 14, color: Colors.grey),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 24),
-                    const Divider(),
-                    const SizedBox(height: 24),
-                    GestureDetector(
-                      onTap: _pickMedia,
-                      child: Container(
-                        height: 180,
-                        width: double.infinity,
+          Container(
+            decoration: AdminTheme.formCardDecoration(context),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
-                          border: Border.all(color: Colors.grey.shade300, width: 2),
-                          borderRadius: BorderRadius.circular(16),
-                          color: Colors.grey.shade50,
+                          color: AdminTheme.primary.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(12),
                         ),
-                        child: _selectedMedia != null
-                            ? ClipRRect(
-                                borderRadius: BorderRadius.circular(14),
-                                child: Image.file(_selectedMedia!, fit: BoxFit.cover),
-                              )
-                            : Column(
-                                mainAxisAlignment: MainAxisAlignment.center,
-                                children: [
-                                  Container(
-                                    padding: const EdgeInsets.all(16),
-                                    decoration: BoxDecoration(
-                                      color: Colors.purple.shade50,
-                                      shape: BoxShape.circle,
-                                    ),
-                                    child: const Icon(Icons.add_photo_alternate, size: 48, color: Colors.purple),
-                                  ),
-                                  const SizedBox(height: 12),
-                                  const Text(
-                                    'Tap to select media',
-                                    style: TextStyle(fontSize: 16, color: Colors.grey),
-                                  ),
-                                ],
-                              ),
+                        child: Icon(Icons.fitness_center, color: AdminTheme.primary, size: 28),
                       ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _editingSubscription == null
+                                  ? 'Create ${widget.title == 'Subscriptions' ? 'Subscription' : widget.title}'
+                                  : 'Edit ${widget.title == 'Subscriptions' ? 'Subscription' : widget.title}',
+                              style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurface),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              _editingSubscription == null
+                                  ? (widget.title == 'Programs'
+                                      ? 'Add a new program'
+                                      : widget.title == 'Classes'
+                                          ? 'Add a new class'
+                                          : 'Add a new course or class')
+                                  : 'Update details below',
+                              style: TextStyle(fontSize: 14, color: Theme.of(context).colorScheme.onSurfaceVariant),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (_editingSubscription != null)
+                        TextButton.icon(
+                          onPressed: () => setState(() => _clearForm()),
+                          icon: const Icon(Icons.close, size: 20),
+                          label: const Text('Cancel'),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                  Divider(color: Theme.of(context).colorScheme.outlineVariant),
+                  const SizedBox(height: 24),
+                  GestureDetector(
+                    onTap: _pickMedia,
+                    child: Container(
+                      height: 180,
+                      width: double.infinity,
+                      decoration: AdminTheme.uploadSectionDecoration(context),
+                      child: _selectedMedia != null
+                          ? Stack(
+                              fit: StackFit.expand,
+                              children: [
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(14),
+                                  child: Image.file(_selectedMedia!, fit: BoxFit.cover),
+                                ),
+                                Positioned(
+                                  top: 8,
+                                  right: 8,
+                                  child: Material(
+                                    color: AdminTheme.editOverlayColor(context),
+                                    borderRadius: BorderRadius.circular(20),
+                                    child: IconButton(
+                                      icon: const Icon(Icons.edit, color: Colors.white, size: 20),
+                                      onPressed: _pickMedia,
+                                      padding: const EdgeInsets.all(6),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            )
+                          : (_editingSubscription != null &&
+                                  (_editingSubscription!['media'] != null || _editingSubscription!['mediaUrl'] != null))
+                              ? Stack(
+                                  fit: StackFit.expand,
+                                  children: [
+                                    ClipRRect(
+                                      borderRadius: BorderRadius.circular(14),
+                                      child: Image.network(
+                                        _editingSubscription!['media']?.toString() ?? _editingSubscription!['mediaUrl']?.toString() ?? '',
+                                        fit: BoxFit.cover,
+                                        errorBuilder: (_, __, ___) => Icon(Icons.broken_image, size: 48, color: AdminTheme.fieldTextMuted(context)),
+                                      ),
+                                    ),
+                                    Positioned(
+                                      top: 8,
+                                      right: 8,
+                                      child: Material(
+                                        color: AdminTheme.editOverlayColor(context),
+                                        borderRadius: BorderRadius.circular(20),
+                                        child: IconButton(
+                                          icon: const Icon(Icons.edit, color: Colors.white, size: 20),
+                                          onPressed: _pickMedia,
+                                          padding: const EdgeInsets.all(6),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                )
+                              : Column(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    Icon(Icons.add_photo_alternate, size: 48, color: AdminTheme.fieldTextMuted(context)),
+                                    const SizedBox(height: 12),
+                                    Text(
+                                      'Tap to select media',
+                                      style: TextStyle(fontSize: 16, color: AdminTheme.fieldTextMuted(context)),
+                                    ),
+                                  ],
+                                ),
                     ),
+                  ),
                   const SizedBox(height: 24),
                   TextField(
                     controller: _nameController,
-                    decoration: InputDecoration(
-                      labelText: 'Name *',
-                      prefixIcon: const Icon(Icons.title, color: Colors.grey),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: Colors.purple, width: 2),
-                      ),
-                      filled: true,
-                      fillColor: Colors.white,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                    ),
+                    decoration: AdminTheme.inputDecoration(context, labelText: 'Name *', prefixIcon: Icon(Icons.title, color: Theme.of(context).colorScheme.onSurfaceVariant)),
                   ),
                   const SizedBox(height: 16),
                   SearchableDropdown<Map<String, dynamic>>(
@@ -550,29 +696,14 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
                     },
                     isRequired: true,
                     prefixIcon: Icons.category,
+                    decoration: AdminTheme.dropdownTriggerDecoration(context),
+                    labelStyle: AdminTheme.dropdownLabelStyle(context),
+                    valueStyle: AdminTheme.dropdownValueStyle(context),
                   ),
                   const SizedBox(height: 16),
                   TextField(
                     controller: _priceController,
-                    decoration: InputDecoration(
-                      labelText: 'Price *',
-                      prefixIcon: const Icon(Icons.attach_money, color: Colors.grey),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: Colors.purple, width: 2),
-                      ),
-                      filled: true,
-                      fillColor: Colors.white,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                    ),
+                    decoration: AdminTheme.inputDecoration(context, labelText: 'Price *', prefixIcon: Icon(Icons.attach_money, color: Theme.of(context).colorScheme.onSurfaceVariant)),
                     keyboardType: TextInputType.number,
                   ),
                   const SizedBox(height: 16),
@@ -589,6 +720,9 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
                     },
                     isRequired: true,
                     prefixIcon: Icons.person,
+                    decoration: AdminTheme.dropdownTriggerDecoration(context),
+                    labelStyle: AdminTheme.dropdownLabelStyle(context),
+                    valueStyle: AdminTheme.dropdownValueStyle(context),
                   ),
                   const SizedBox(height: 16),
                   SearchableDropdown<Map<String, dynamic>>(
@@ -604,29 +738,14 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
                     },
                     isRequired: true,
                     prefixIcon: Icons.fitness_center,
+                    decoration: AdminTheme.dropdownTriggerDecoration(context),
+                    labelStyle: AdminTheme.dropdownLabelStyle(context),
+                    valueStyle: AdminTheme.dropdownValueStyle(context),
                   ),
                   const SizedBox(height: 16),
                   TextField(
                     controller: _descriptionController,
-                    decoration: InputDecoration(
-                      labelText: 'Description',
-                      prefixIcon: const Icon(Icons.description, color: Colors.grey),
-                      border: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
-                      ),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: BorderSide(color: Colors.grey.shade300),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(12),
-                        borderSide: const BorderSide(color: Colors.purple, width: 2),
-                      ),
-                      filled: true,
-                      fillColor: Colors.white,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                    ),
+                    decoration: AdminTheme.inputDecoration(context, labelText: 'Description', prefixIcon: Icon(Icons.description, color: Theme.of(context).colorScheme.onSurfaceVariant)),
                     maxLines: 3,
                   ),
                   const SizedBox(height: 16),
@@ -644,6 +763,9 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
                     },
                     isRequired: true,
                     prefixIcon: Icons.location_on,
+                    decoration: AdminTheme.dropdownTriggerDecoration(context),
+                    labelStyle: AdminTheme.dropdownLabelStyle(context),
+                    valueStyle: AdminTheme.dropdownValueStyle(context),
                   ),
                   const SizedBox(height: 16),
                   Row(
@@ -651,25 +773,7 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
                       Expanded(
                         child: TextField(
                           controller: _startTimeController,
-                          decoration: InputDecoration(
-                            labelText: 'Start Time *',
-                            prefixIcon: const Icon(Icons.access_time, color: Colors.grey),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(color: Colors.grey.shade300),
-                            ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(color: Colors.grey.shade300),
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: const BorderSide(color: Colors.purple, width: 2),
-                            ),
-                            filled: true,
-                            fillColor: Colors.white,
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                          ),
+                          decoration: AdminTheme.inputDecoration(context, labelText: 'Start Time *', prefixIcon: Icon(Icons.access_time, color: Theme.of(context).colorScheme.onSurfaceVariant)),
                           readOnly: true,
                           onTap: () => _pickTime(_startTimeController),
                         ),
@@ -678,25 +782,7 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
                       Expanded(
                         child: TextField(
                           controller: _endTimeController,
-                          decoration: InputDecoration(
-                            labelText: 'End Time *',
-                            prefixIcon: const Icon(Icons.access_time_filled, color: Colors.grey),
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(color: Colors.grey.shade300),
-                            ),
-                            enabledBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: BorderSide(color: Colors.grey.shade300),
-                            ),
-                            focusedBorder: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                              borderSide: const BorderSide(color: Colors.purple, width: 2),
-                            ),
-                            filled: true,
-                            fillColor: Colors.white,
-                            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                          ),
+                          decoration: AdminTheme.inputDecoration(context, labelText: 'End Time *', prefixIcon: Icon(Icons.access_time_filled, color: Theme.of(context).colorScheme.onSurfaceVariant)),
                           readOnly: true,
                           onTap: () => _pickTime(_endTimeController),
                         ),
@@ -707,32 +793,32 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: Colors.grey.shade50,
+                      color: Theme.of(context).colorScheme.surfaceContainerHighest,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.grey.shade200),
+                      border: Border.all(color: Theme.of(context).colorScheme.outline),
                     ),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Row(
                           children: [
-                            const Icon(Icons.calendar_today, color: Colors.purple, size: 20),
+                            Icon(Icons.calendar_today, color: AdminTheme.primary, size: 20),
                             const SizedBox(width: 8),
-                            const Text(
+                            Text(
                               'Class Dates',
-                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurface),
                             ),
                             const Spacer(),
                             Container(
                               padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                               decoration: BoxDecoration(
-                                color: Colors.purple.shade100,
+                                color: AdminTheme.primary.withOpacity(0.2),
                                 borderRadius: BorderRadius.circular(20),
                               ),
                               child: Text(
                                 '${_selectedDates.length} date${_selectedDates.length != 1 ? 's' : ''}',
                                 style: TextStyle(
-                                  color: Colors.purple.shade900,
+                                  color: AdminTheme.primaryDark,
                                   fontWeight: FontWeight.bold,
                                 ),
                               ),
@@ -742,18 +828,11 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
                         const SizedBox(height: 12),
                         SizedBox(
                           width: double.infinity,
-                          child: ElevatedButton.icon(
+                          child: FilledButton.icon(
                             onPressed: _pickDate,
                             icon: const Icon(Icons.add_circle_outline, size: 20),
                             label: const Text('Add Date'),
-                            style: ElevatedButton.styleFrom(
-                              backgroundColor: Colors.purple,
-                              foregroundColor: Colors.white,
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                            ),
+                            style: AdminTheme.primaryButtonStyle,
                           ),
                         ),
                         if (_selectedDates.isNotEmpty) ...[
@@ -765,8 +844,8 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
                               return Chip(
                                 label: Text(date),
                                 deleteIcon: const Icon(Icons.close, size: 18),
-                                backgroundColor: Colors.purple.shade50,
-                                labelStyle: TextStyle(color: Colors.purple.shade900),
+                                backgroundColor: AdminTheme.primary.withOpacity(0.15),
+                                labelStyle: TextStyle(color: Theme.of(context).colorScheme.onSurface),
                                 onDeleted: () {
                                   setState(() {
                                     _selectedDates.remove(date);
@@ -783,17 +862,17 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
                   Container(
                     padding: const EdgeInsets.all(16),
                     decoration: BoxDecoration(
-                      color: Colors.grey.shade50,
+                      color: Theme.of(context).colorScheme.surfaceContainerHighest,
                       borderRadius: BorderRadius.circular(12),
-                      border: Border.all(color: Colors.grey.shade200),
+                      border: Border.all(color: Theme.of(context).colorScheme.outline),
                     ),
                     child: Column(
                       children: [
                         CheckboxListTile(
-                          title: const Text('Is Active', style: TextStyle(fontWeight: FontWeight.w500)),
-                          subtitle: const Text('Make this subscription available for booking'),
+                          title: Text('Is Active', style: TextStyle(fontWeight: FontWeight.w500, color: Theme.of(context).colorScheme.onSurface)),
+                          subtitle: Text('Make this subscription available for booking', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
                           value: _isActive,
-                          activeColor: Colors.purple,
+                          activeColor: AdminTheme.primary,
                           contentPadding: EdgeInsets.zero,
                           onChanged: (value) {
                             setState(() {
@@ -801,12 +880,12 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
                             });
                           },
                         ),
-                        const Divider(),
+                        Divider(color: Theme.of(context).colorScheme.outlineVariant),
                         CheckboxListTile(
-                          title: const Text('Is Single Class', style: TextStyle(fontWeight: FontWeight.w500)),
-                          subtitle: const Text('Check if this is a one-time class (requires 1 date)'),
+                          title: Text('Is Single Class', style: TextStyle(fontWeight: FontWeight.w500, color: Theme.of(context).colorScheme.onSurface)),
+                          subtitle: Text('Check if this is a one-time class (requires 1 date)', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
                           value: _isSingleClass,
-                          activeColor: Colors.purple,
+                          activeColor: AdminTheme.primary,
                           contentPadding: EdgeInsets.zero,
                           onChanged: (value) {
                             setState(() {
@@ -821,126 +900,102 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
                   SizedBox(
                     width: double.infinity,
                     height: 50,
-                    child: ElevatedButton.icon(
-                      onPressed: _isLoading ? null : _createSubscription,
+                    child: FilledButton.icon(
+                      onPressed: _isLoading
+                          ? null
+                          : (_editingSubscription != null ? _updateSubscriptionFromForm : _createSubscription),
                       icon: _isLoading
                           ? const SizedBox(
                               width: 20,
                               height: 20,
                               child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                             )
-                          : const Icon(Icons.add_circle, size: 20),
+                          : Icon(_editingSubscription != null ? Icons.save : Icons.add_circle, size: 20),
                       label: Text(
-                        _isLoading ? 'Creating...' : 'Create Subscription',
+                        _isLoading
+                            ? (_editingSubscription != null ? 'Updating...' : 'Creating...')
+                            : (_editingSubscription != null ? 'Update ${widget.title == 'Subscriptions' ? 'Subscription' : widget.title}' : 'Create ${widget.title == 'Subscriptions' ? 'Subscription' : widget.title}'),
                         style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
                       ),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.purple,
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        elevation: 2,
-                      ),
+                      style: AdminTheme.primaryButtonStyle,
                     ),
                   ),
                 ],
               ),
             ),
           ),
-          ),
           const SizedBox(height: 16),
-          Card(
-            elevation: 2,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-            child: Container(
-              decoration: BoxDecoration(
-                borderRadius: BorderRadius.circular(16),
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Colors.white, Colors.grey.shade50],
+          Container(
+            decoration: BoxDecoration(
+              color: Theme.of(context).brightness == Brightness.dark ? AdminTheme.cardBgDark : AdminTheme.cardBgTint,
+              borderRadius: BorderRadius.circular(AdminTheme.radiusCard),
+              border: Border.all(color: AdminTheme.border),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withOpacity(Theme.of(context).brightness == Brightness.dark ? 0.2 : 0.06),
+                  blurRadius: 10,
+                  offset: const Offset(0, 3),
                 ),
-              ),
-              child: Padding(
-                padding: const EdgeInsets.all(20),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      children: [
-                        Container(
-                          padding: const EdgeInsets.all(12),
-                          decoration: BoxDecoration(
-                            color: Colors.blue.shade50,
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                          child: const Icon(Icons.list, color: Colors.blue, size: 24),
+              ],
+            ),
+            child: Padding(
+              padding: const EdgeInsets.all(20),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AdminTheme.primary.withOpacity(0.15),
+                          borderRadius: BorderRadius.circular(12),
                         ),
-                        const SizedBox(width: 16),
-                        const Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Subscriptions List',
-                                style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-                              ),
-                              SizedBox(height: 4),
-                              Text(
-                                'View and manage all subscriptions',
-                                style: TextStyle(fontSize: 14, color: Colors.grey),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 20),
-                    const Divider(),
-                    const SizedBox(height: 20),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: TextField(
-                            controller: _searchController,
-                            decoration: InputDecoration(
-                              labelText: 'Search subscriptions...',
-                              prefixIcon: const Icon(Icons.search, color: Colors.grey),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(color: Colors.grey.shade300),
-                              ),
-                              enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(color: Colors.grey.shade300),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: const BorderSide(color: Colors.blue, width: 2),
-                              ),
-                              filled: true,
-                              fillColor: Colors.white,
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
+                        child: Icon(Icons.list, color: AdminTheme.primary, size: 24),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${widget.title} List',
+                              style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Theme.of(context).colorScheme.onSurface),
                             ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        ElevatedButton.icon(
-                          onPressed: _loadSubscriptions,
-                          icon: const Icon(Icons.search, size: 20),
-                          label: const Text('Search'),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: Colors.blue,
-                            foregroundColor: Colors.white,
-                            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-                            shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(12),
+                            const SizedBox(height: 4),
+                            Text(
+                              'View and manage all ${widget.title.toLowerCase()}',
+                              style: TextStyle(fontSize: 14, color: Theme.of(context).colorScheme.onSurfaceVariant),
                             ),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 20),
+                  Divider(color: Theme.of(context).colorScheme.outlineVariant),
+                  const SizedBox(height: 20),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _searchController,
+                          decoration: AdminTheme.inputDecoration(
+                            context,
+                            labelText: 'Search ${widget.title.toLowerCase()}...',
+                            prefixIcon: Icon(Icons.search, color: Theme.of(context).colorScheme.onSurfaceVariant),
                           ),
                         ),
-                      ],
-                    ),
+                      ),
+                      const SizedBox(width: 12),
+                      FilledButton.icon(
+                        onPressed: _applySearchFilter,
+                        icon: const Icon(Icons.search, size: 20),
+                        label: const Text('Search'),
+                        style: AdminTheme.primaryButtonStyle,
+                      ),
+                    ],
+                  ),
                     const SizedBox(height: 20),
                   _isLoading
                       ? const Center(child: CircularProgressIndicator())
@@ -951,11 +1006,11 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
                                 child: Column(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: [
-                                    Icon(Icons.subscriptions, size: 64, color: Colors.grey.shade400),
+                                    Icon(Icons.subscriptions, size: 64, color: Theme.of(context).colorScheme.onSurfaceVariant),
                                     const SizedBox(height: 16),
                                     Text(
                                       'No subscriptions found',
-                                      style: TextStyle(fontSize: 18, color: Colors.grey.shade600),
+                                      style: TextStyle(fontSize: 18, color: Theme.of(context).colorScheme.onSurfaceVariant),
                                     ),
                                   ],
                                 ),
@@ -978,7 +1033,7 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
                                       height: 60,
                                       decoration: BoxDecoration(
                                         borderRadius: BorderRadius.circular(12),
-                                        color: Colors.purple.shade50,
+                                        color: AdminTheme.primary.withOpacity(0.15),
                                       ),
                                       child: subscription['media'] != null
                                           ? ClipRRect(
@@ -986,20 +1041,20 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
                                               child: Image.network(
                                                 subscription['media'],
                                                 fit: BoxFit.cover,
-                                                errorBuilder: (context, error, stackTrace) => const Icon(Icons.fitness_center, color: Colors.purple),
+                                                errorBuilder: (context, error, stackTrace) => Icon(Icons.fitness_center, color: AdminTheme.primary),
                                               ),
                                             )
-                                          : const Icon(Icons.fitness_center, color: Colors.purple),
+                                          : Icon(Icons.fitness_center, color: AdminTheme.primary),
                                     ),
                                     title: Text(
                                       subscription['name'] ?? 'Unknown',
-                                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 16),
+                                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Theme.of(context).colorScheme.onSurface),
                                     ),
                                     subtitle: Padding(
                                       padding: const EdgeInsets.only(top: 4),
                                       child: Text(
                                         'Price: AED ${subscription['price'] ?? 'N/A'}',
-                                        style: TextStyle(color: Colors.grey.shade700, fontSize: 14),
+                                        style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 14),
                                       ),
                                     ),
                                     trailing: Row(
@@ -1025,7 +1080,6 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
               ),
             ),
           ),
-          ),
         ],
       ),
     );
@@ -1033,6 +1087,7 @@ class _SubscriptionManagerState extends State<SubscriptionManager> {
 
   @override
   void dispose() {
+    _searchController.removeListener(_applySearchFilter);
     _nameController.dispose();
     _priceController.dispose();
     _descriptionController.dispose();

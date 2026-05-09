@@ -9,6 +9,7 @@ import '../../services/subscription_service.dart';
 import '../../services/master_data_service.dart';
 import '../../services/trainer_service.dart';
 import '../../utils/asset_to_file_helper.dart';
+import '../../widgets/admin/admin_theme.dart';
 
 class WellnessCardManager extends StatefulWidget {
   @override
@@ -39,7 +40,8 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
   List<String> _selectedDates = [];
   bool _isActive = true;
   bool _isSingleClass = false;
-  
+  Map<String, dynamic>? _editingSubscription;
+
   List<dynamic> _categories = [];
   List<dynamic> _trainers = [];
   List<dynamic> _sessions = [];
@@ -192,7 +194,7 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
       if (mounted) {
         setState(() => _isLoading = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error loading subscriptions: ${e.toString()}')),
+          SnackBar(content: Text('Error loading subscriptions: ${_errorMessage(e)}')),
         );
       }
     }
@@ -324,9 +326,9 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
       return;
     }
 
-    if (!_isSingleClass && _selectedDates.length != 2) {
+    if (!_isSingleClass && _selectedDates.length < 2) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Multi-class must have exactly two dates (start and end)')),
+        const SnackBar(content: Text('Multi-day event needs at least two dates (e.g. start and end)')),
       );
       return;
     }
@@ -431,7 +433,7 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error creating subscription: ${e.toString()}')),
+          SnackBar(content: Text('Error creating subscription: ${_errorMessage(e)}')),
         );
       }
     } finally {
@@ -441,11 +443,208 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
     }
   }
 
+  static String _errorMessage(dynamic e) {
+    String msg = e.toString().trim();
+    if (msg.startsWith('Exception: ')) msg = msg.substring(11).trim();
+    const prefixes = [
+      'Update subscription error: ',
+      'Create subscription error: ',
+      'Delete subscription error: ',
+      'Get all subscriptions error: ',
+    ];
+    for (final p in prefixes) {
+      if (msg.startsWith(p)) {
+        msg = msg.substring(p.length).trim();
+        break;
+      }
+    }
+    return msg.isEmpty ? 'Something went wrong' : msg;
+  }
+
+  static String _getSubscriptionId(dynamic subscription) {
+    if (subscription == null) return '';
+    if (subscription is Map) {
+      final map = Map<String, dynamic>.from(subscription);
+      final id = map['_id'] ?? map['id'] ?? map['subscriptionId'];
+      if (id != null && id.toString().trim().isNotEmpty) return id.toString().trim();
+      final data = map['data'];
+      if (data is Map) {
+        final dataMap = Map<String, dynamic>.from(data);
+        final dataId = dataMap['_id'] ?? dataMap['id'];
+        if (dataId != null && dataId.toString().trim().isNotEmpty) return dataId.toString().trim();
+      }
+    }
+    return '';
+  }
+
+  static String? _getIdFromField(dynamic value) {
+    if (value == null) return null;
+    if (value is Map) {
+      final id = value['_id'] ?? value['id'];
+      return id?.toString().trim();
+    }
+    final s = value.toString().trim();
+    return s.isEmpty ? null : s;
+  }
+
+  void _populateFormFromSubscription(Map<String, dynamic> subscription) {
+    _nameController.text = subscription['name']?.toString() ?? '';
+    _priceController.text = subscription['price']?.toString() ?? '';
+    _descriptionController.text = subscription['description']?.toString() ?? '';
+    _selectedCategoryId = _getIdFromField(subscription['categoryId']) ?? subscription['categoryId']?.toString();
+    _selectedTrainerId = _getIdFromField(subscription['trainer']);
+    _selectedSessionTypeId = _getIdFromField(subscription['sessionType']);
+    _selectedAddressId = _getIdFromField(subscription['Address']) ?? _getIdFromField(subscription['addressId']);
+    _startTimeController.text = subscription['startTime']?.toString() ?? '';
+    _endTimeController.text = subscription['endTime']?.toString() ?? '';
+    _isActive = subscription['isActive'] != false;
+    _isSingleClass = subscription['isSingleClass'] == true;
+    final dateList = subscription['date'];
+    if (dateList is List) {
+      _selectedDates = dateList.map((e) => e?.toString() ?? '').where((s) => s.isNotEmpty).toList();
+      _selectedDates.sort();
+    } else {
+      _selectedDates = [];
+    }
+    _selectedMedia = null;
+    _rangeStartDate = null;
+    _rangeEndDate = null;
+    if (_selectedCategoryId != null) {
+      _masterDataService.getSessionsByCategoryId(_selectedCategoryId!).then((sessions) {
+        if (mounted) setState(() => _sessions = sessions);
+      });
+    }
+  }
+
+  void _clearForm() {
+    _nameController.clear();
+    _priceController.clear();
+    _descriptionController.clear();
+    _startTimeController.clear();
+    _endTimeController.clear();
+    _manualAddressIdController.clear();
+    setState(() {
+      _selectedMedia = null;
+      _selectedCategoryId = null;
+      _selectedTrainerId = null;
+      _selectedSessionTypeId = null;
+      _selectedAddressId = null;
+      _selectedDates = [];
+      _editingSubscription = null;
+      _rangeStartDate = null;
+      _rangeEndDate = null;
+    });
+  }
+
+  Future<void> _updateSubscriptionFromForm() async {
+    final sub = _editingSubscription;
+    if (sub == null) return;
+    final subscriptionId = _getSubscriptionId(sub);
+    if (subscriptionId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cannot update: subscription ID not found')),
+      );
+      return;
+    }
+    if (_nameController.text.trim().isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Name is required')),
+      );
+      return;
+    }
+    setState(() => _isLoading = true);
+    try {
+      final addressId = _useManualAddress ? _manualAddressIdController.text.trim() : _selectedAddressId;
+      await _subscriptionService.updateSubscription(
+        subscriptionId: subscriptionId,
+        media: _selectedMedia,
+        name: _nameController.text.trim(),
+        price: double.tryParse(_priceController.text) ?? double.tryParse(sub['price']?.toString() ?? '') ?? 0,
+        description: _descriptionController.text.trim(),
+        categoryId: _selectedCategoryId,
+        trainer: _selectedTrainerId,
+        sessionType: _selectedSessionTypeId,
+        date: _selectedDates.isEmpty ? null : _selectedDates,
+        startTime: _startTimeController.text.trim().isEmpty ? null : _startTimeController.text.trim(),
+        endTime: _endTimeController.text.trim().isEmpty ? null : _endTimeController.text.trim(),
+        addressId: addressId?.isEmpty == true ? null : addressId,
+        isActive: _isActive,
+        isSingleClass: _isSingleClass,
+      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Wellness subscription updated successfully')),
+        );
+        _clearForm();
+        _loadSubscriptions();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error updating: ${_errorMessage(e)}')),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  void _showEditDialog(Map<String, dynamic> subscription) {
+    if (_getSubscriptionId(subscription).isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cannot edit: subscription ID not found')),
+      );
+      return;
+    }
+    _populateFormFromSubscription(subscription);
+    setState(() => _editingSubscription = subscription);
+  }
+
   void _delete(String id) {
-    // Delete functionality not available in backend yet
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Delete functionality not yet implemented')),
-    );
+    if (id.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Cannot delete: subscription ID not found')),
+      );
+      return;
+    }
+    showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Delete Subscription'),
+        content: const Text('Are you sure you want to delete this wellness subscription? This action cannot be undone.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: FilledButton.styleFrom(backgroundColor: Colors.red, foregroundColor: Colors.white),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    ).then((confirmed) async {
+      if (confirmed != true || !mounted) return;
+      setState(() => _isLoading = true);
+      try {
+        await _subscriptionService.deleteSubscription(subscriptionId: id);
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Subscription deleted successfully')),
+          );
+          _loadSubscriptions();
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Error deleting: ${_errorMessage(e)}')),
+          );
+        }
+      } finally {
+        if (mounted) setState(() => _isLoading = false);
+      }
+    });
   }
 
   @override
@@ -461,11 +660,8 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
             child: Container(
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(16),
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Colors.white, Colors.grey.shade50],
-                ),
+                color: Theme.of(context).brightness == Brightness.dark ? AdminTheme.cardBgDark : AdminTheme.cardBgTint,
+                border: Border.all(color: AdminTheme.primary.withOpacity(0.2), width: 1),
               ),
               child: Padding(
                 padding: const EdgeInsets.all(20),
@@ -477,14 +673,11 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
           Card(
             elevation: 2,
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            color: Theme.of(context).brightness == Brightness.dark ? AdminTheme.cardBgDark : AdminTheme.cardBgTint,
             child: Container(
               decoration: BoxDecoration(
                 borderRadius: BorderRadius.circular(16),
-                gradient: LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Colors.white, Colors.grey.shade50],
-                ),
+                border: Border.all(color: AdminTheme.primary.withOpacity(0.2), width: 1),
               ),
               child: Padding(
                 padding: const EdgeInsets.all(20),
@@ -513,7 +706,7 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
                               SizedBox(height: 4),
                               Text(
                                 'View and manage all wellness subscriptions',
-                                style: TextStyle(fontSize: 14, color: Colors.grey),
+                                style: TextStyle(fontSize: 14, color: Theme.of(context).colorScheme.onSurfaceVariant),
                               ),
                             ],
                           ),
@@ -528,25 +721,7 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
                         Expanded(
                           child: TextField(
                             controller: _searchController,
-                            decoration: InputDecoration(
-                              labelText: 'Search subscriptions...',
-                              prefixIcon: const Icon(Icons.search, color: Colors.grey),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(color: Colors.grey.shade300),
-                              ),
-                              enabledBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: BorderSide(color: Colors.grey.shade300),
-                              ),
-                              focusedBorder: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(12),
-                                borderSide: const BorderSide(color: Colors.green, width: 2),
-                              ),
-                              filled: true,
-                              fillColor: Colors.white,
-                              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                            ),
+                            decoration: AdminTheme.inputDecoration(context, labelText: 'Search subscriptions...', prefixIcon: const Icon(Icons.search), isDense: true),
                           ),
                         ),
                         const SizedBox(width: 12),
@@ -575,11 +750,11 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
                                   child: Column(
                                     mainAxisAlignment: MainAxisAlignment.center,
                                     children: [
-                                      Icon(Icons.spa, size: 64, color: Colors.grey.shade400),
+                                      Icon(Icons.spa, size: 64, color: Theme.of(context).colorScheme.onSurfaceVariant),
                                       const SizedBox(height: 16),
                                       Text(
                                         'No wellness subscriptions found',
-                                        style: TextStyle(fontSize: 18, color: Colors.grey.shade600),
+                                        style: TextStyle(fontSize: 18, color: Theme.of(context).colorScheme.onSurfaceVariant),
                                       ),
                                     ],
                                   ),
@@ -623,7 +798,7 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
                                         padding: const EdgeInsets.only(top: 4),
                                         child: Text(
                                           'Price: AED ${subscription['price'] ?? 'N/A'}',
-                                          style: TextStyle(color: Colors.grey.shade700, fontSize: 14),
+                                          style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 14),
                                         ),
                                       ),
                                       trailing: Row(
@@ -631,14 +806,12 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
                                         children: [
                                           IconButton(
                                             icon: const Icon(Icons.edit, color: Colors.blue),
-                                            onPressed: () {
-                                              // TODO: Implement edit
-                                            },
+                                            onPressed: () => _showEditDialog(subscription),
                                             tooltip: 'Edit',
                                           ),
                                           IconButton(
                                             icon: const Icon(Icons.delete, color: Colors.red),
-                                            onPressed: () => _delete(subscription['_id'] ?? subscription['id'] ?? ''),
+                                            onPressed: () => _delete(_getSubscriptionId(subscription)),
                                             tooltip: 'Delete',
                                           ),
                                         ],
@@ -672,22 +845,28 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
               child: const Icon(Icons.spa, color: Colors.green, size: 28),
             ),
             const SizedBox(width: 16),
-            const Expanded(
+            Expanded(
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Create Wellness Subscription',
-                    style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
+                    _editingSubscription == null ? 'Create Wellness Subscription' : 'Edit Wellness Subscription',
+                    style: const TextStyle(fontSize: 24, fontWeight: FontWeight.bold),
                   ),
-                  SizedBox(height: 4),
+                  const SizedBox(height: 4),
                   Text(
-                    'Add a new wellness course or class',
-                    style: TextStyle(fontSize: 14, color: Colors.grey),
+                    _editingSubscription == null ? 'Add a new wellness course or class' : 'Update details below',
+                    style: TextStyle(fontSize: 14, color: Theme.of(context).colorScheme.onSurfaceVariant),
                   ),
                 ],
               ),
             ),
+            if (_editingSubscription != null)
+              TextButton.icon(
+                onPressed: () => setState(() => _clearForm()),
+                icon: const Icon(Icons.close, size: 20),
+                label: const Text('Cancel'),
+              ),
           ],
         ),
         const SizedBox(height: 24),
@@ -731,24 +910,66 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
             child: Container(
               height: 180,
               width: double.infinity,
-              decoration: BoxDecoration(
-                border: Border.all(color: Colors.grey.shade300, width: 2),
-                borderRadius: BorderRadius.circular(16),
-                color: Colors.grey.shade50,
-              ),
+              decoration: AdminTheme.uploadSectionDecoration(context),
               child: _selectedMedia != null
-                  ? ClipRRect(
-                      borderRadius: BorderRadius.circular(14),
-                      child: Image.file(_selectedMedia!, fit: BoxFit.cover),
-                    )
-                  : const Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
+                  ? Stack(
+                      fit: StackFit.expand,
                       children: [
-                        Icon(Icons.add_photo_alternate, size: 48, color: Colors.grey),
-                        SizedBox(height: 8),
-                        Text('Tap to select image', style: TextStyle(color: Colors.grey)),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(14),
+                          child: Image.file(_selectedMedia!, fit: BoxFit.cover),
+                        ),
+                        Positioned(
+                          top: 8,
+                          right: 8,
+                          child: Material(
+                            color: AdminTheme.editOverlayColor(context),
+                            borderRadius: BorderRadius.circular(20),
+                            child: IconButton(
+                              icon: const Icon(Icons.edit, color: Colors.white, size: 20),
+                              onPressed: _pickMedia,
+                              padding: const EdgeInsets.all(6),
+                            ),
+                          ),
+                        ),
                       ],
-                    ),
+                    )
+                  : (_editingSubscription != null &&
+                          (_editingSubscription!['media'] != null || _editingSubscription!['mediaUrl'] != null))
+                      ? Stack(
+                          fit: StackFit.expand,
+                          children: [
+                            ClipRRect(
+                              borderRadius: BorderRadius.circular(14),
+                              child: Image.network(
+                                _editingSubscription!['media']?.toString() ?? _editingSubscription!['mediaUrl']?.toString() ?? '',
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => Icon(Icons.broken_image, size: 48, color: AdminTheme.fieldTextMuted(context)),
+                              ),
+                            ),
+                            Positioned(
+                              top: 8,
+                              right: 8,
+                              child: Material(
+                                color: AdminTheme.editOverlayColor(context),
+                                borderRadius: BorderRadius.circular(20),
+                                child: IconButton(
+                                  icon: const Icon(Icons.edit, color: Colors.white, size: 20),
+                                  onPressed: _pickMedia,
+                                  padding: const EdgeInsets.all(6),
+                                ),
+                              ),
+                            ),
+                          ],
+                        )
+                      : Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.add_photo_alternate, size: 48, color: AdminTheme.fieldTextMuted(context)),
+                            const SizedBox(height: 8),
+                            Text('Tap to select image', style: TextStyle(color: AdminTheme.fieldTextMuted(context))),
+                          ],
+                        ),
             ),
           )
         else
@@ -757,26 +978,7 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
             children: [
               TextField(
                 controller: _mediaUrlController,
-                decoration: InputDecoration(
-                  labelText: 'Image URL *',
-                  hintText: 'https://example.com/image.jpg',
-                  prefixIcon: const Icon(Icons.link, color: Colors.grey),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Colors.green, width: 2),
-                  ),
-                  filled: true,
-                  fillColor: Colors.white,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                ),
+                decoration: AdminTheme.inputDecoration(context, labelText: 'Image URL *', hintText: 'https://example.com/image.jpg', prefixIcon: const Icon(Icons.link)),
                 onChanged: (value) => setState(() {}), // Refresh to show preview
               ),
               const SizedBox(height: 8),
@@ -785,9 +987,9 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
                   height: 180,
                   width: double.infinity,
                   decoration: BoxDecoration(
-                    border: Border.all(color: Colors.grey.shade300, width: 2),
+                    border: Border.all(color: Theme.of(context).colorScheme.outline, width: 2),
                     borderRadius: BorderRadius.circular(16),
-                    color: Colors.grey.shade50,
+                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
                   ),
                   child: ClipRRect(
                     borderRadius: BorderRadius.circular(14),
@@ -814,25 +1016,7 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
         const SizedBox(height: 24),
         TextField(
           controller: _nameController,
-          decoration: InputDecoration(
-            labelText: 'Name *',
-            prefixIcon: const Icon(Icons.title, color: Colors.grey),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: Colors.grey.shade300),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: Colors.grey.shade300),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: Colors.green, width: 2),
-            ),
-            filled: true,
-            fillColor: Colors.white,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-          ),
+          decoration: AdminTheme.inputDecoration(context, labelText: 'Name *', prefixIcon: const Icon(Icons.title)),
         ),
         const SizedBox(height: 16),
         _categories.isEmpty
@@ -842,26 +1026,7 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
               )
             : DropdownButtonFormField<String>(
                 value: _wellnessCategoryId ?? _selectedCategoryId,
-                decoration: InputDecoration(
-                  labelText: 'Category *',
-                  prefixIcon: const Icon(Icons.category, color: Colors.grey),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Colors.green, width: 2),
-                  ),
-                  filled: true,
-                  fillColor: Colors.white,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                  helperText: 'Wellness category (locked to wellness)',
-                ),
+                decoration: AdminTheme.inputDecoration(context, labelText: 'Category *', hintText: 'Wellness category (locked to wellness)', prefixIcon: const Icon(Icons.category)),
                 // Filter to only show wellness categories (exclude fitness)
                 items: _categories.where((cat) {
                   final categoryName = (cat['cName'] ?? '').toString().toLowerCase();
@@ -909,25 +1074,7 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
         const SizedBox(height: 16),
         TextField(
           controller: _priceController,
-          decoration: InputDecoration(
-            labelText: 'Price *',
-            prefixIcon: const Icon(Icons.attach_money, color: Colors.grey),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: Colors.grey.shade300),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: Colors.grey.shade300),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: Colors.green, width: 2),
-            ),
-            filled: true,
-            fillColor: Colors.white,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-          ),
+          decoration: AdminTheme.inputDecoration(context, labelText: 'Price *', prefixIcon: const Icon(Icons.attach_money)),
           keyboardType: TextInputType.number,
         ),
         const SizedBox(height: 16),
@@ -938,25 +1085,7 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
               )
             : DropdownButtonFormField<String>(
                 value: _selectedTrainerId,
-                decoration: InputDecoration(
-                  labelText: 'Trainer *',
-                  prefixIcon: const Icon(Icons.person, color: Colors.grey),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Colors.green, width: 2),
-                  ),
-                  filled: true,
-                  fillColor: Colors.white,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                ),
+                decoration: AdminTheme.inputDecoration(context, labelText: 'Trainer *', prefixIcon: const Icon(Icons.person)),
                 items: _trainers.map((trainer) {
                   return DropdownMenuItem<String>(
                     value: trainer['_id']?.toString() ?? trainer['id']?.toString(),
@@ -977,25 +1106,7 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
               )
             : DropdownButtonFormField<String>(
                 value: _selectedSessionTypeId,
-                decoration: InputDecoration(
-                  labelText: 'Session Type *',
-                  prefixIcon: const Icon(Icons.fitness_center, color: Colors.grey),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Colors.green, width: 2),
-                  ),
-                  filled: true,
-                  fillColor: Colors.white,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                ),
+                decoration: AdminTheme.inputDecoration(context, labelText: 'Session Type *', prefixIcon: const Icon(Icons.fitness_center)),
                 items: _sessions.map((session) {
                   return DropdownMenuItem<String>(
                     value: session['_id']?.toString() ?? session['id']?.toString(),
@@ -1011,25 +1122,7 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
         const SizedBox(height: 16),
         TextField(
           controller: _descriptionController,
-          decoration: InputDecoration(
-            labelText: 'Description',
-            prefixIcon: const Icon(Icons.description, color: Colors.grey),
-            border: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: Colors.grey.shade300),
-            ),
-            enabledBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: BorderSide(color: Colors.grey.shade300),
-            ),
-            focusedBorder: OutlineInputBorder(
-              borderRadius: BorderRadius.circular(12),
-              borderSide: const BorderSide(color: Colors.green, width: 2),
-            ),
-            filled: true,
-            fillColor: Colors.white,
-            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-          ),
+          decoration: AdminTheme.inputDecoration(context, labelText: 'Description', prefixIcon: const Icon(Icons.description)),
           maxLines: 3,
         ),
         const SizedBox(height: 16),
@@ -1066,26 +1159,7 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
         _useManualAddress
             ? TextField(
                 controller: _manualAddressIdController,
-                decoration: InputDecoration(
-                  labelText: 'Enter Location ID *',
-                  hintText: 'Enter LocationMaster ObjectId',
-                  prefixIcon: const Icon(Icons.edit_location, color: Colors.grey),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Colors.green, width: 2),
-                  ),
-                  filled: true,
-                  fillColor: Colors.white,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                ),
+                decoration: AdminTheme.inputDecoration(context, labelText: 'Enter Location ID *', hintText: 'Enter LocationMaster ObjectId', prefixIcon: const Icon(Icons.edit_location)),
                 onChanged: (value) {
                   setState(() {
                     _selectedAddressId = value.trim().isEmpty ? null : value.trim();
@@ -1129,25 +1203,7 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
                       )
                     : DropdownButtonFormField<String>(
                         value: _selectedAddressId,
-                        decoration: InputDecoration(
-                          labelText: 'Select Location/Address *',
-                          prefixIcon: const Icon(Icons.location_on, color: Colors.grey),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(color: Colors.grey.shade300),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: BorderSide(color: Colors.grey.shade300),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(12),
-                            borderSide: const BorderSide(color: Colors.green, width: 2),
-                          ),
-                          filled: true,
-                          fillColor: Colors.white,
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                        ),
+                        decoration: AdminTheme.inputDecoration(context, labelText: 'Select Location/Address *', prefixIcon: const Icon(Icons.location_on)),
                         items: _locations.map((location) {
                           return DropdownMenuItem<String>(
                             value: location['_id']?.toString() ?? location['id']?.toString(),
@@ -1166,25 +1222,7 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
             Expanded(
               child: TextField(
                 controller: _startTimeController,
-                decoration: InputDecoration(
-                  labelText: 'Start Time *',
-                  prefixIcon: const Icon(Icons.access_time, color: Colors.grey),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Colors.green, width: 2),
-                  ),
-                  filled: true,
-                  fillColor: Colors.white,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                ),
+                decoration: AdminTheme.inputDecoration(context, labelText: 'Start Time *', prefixIcon: const Icon(Icons.access_time)),
                 readOnly: true,
                 onTap: () => _pickTime(_startTimeController),
               ),
@@ -1193,25 +1231,7 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
             Expanded(
               child: TextField(
                 controller: _endTimeController,
-                decoration: InputDecoration(
-                  labelText: 'End Time *',
-                  prefixIcon: const Icon(Icons.access_time_filled, color: Colors.grey),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: BorderSide(color: Colors.grey.shade300),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: Colors.green, width: 2),
-                  ),
-                  filled: true,
-                  fillColor: Colors.white,
-                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
-                ),
+                decoration: AdminTheme.inputDecoration(context, labelText: 'End Time *', prefixIcon: const Icon(Icons.access_time_filled)),
                 readOnly: true,
                 onTap: () => _pickTime(_endTimeController),
               ),
@@ -1222,9 +1242,9 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: Colors.grey.shade50,
+            color: Theme.of(context).brightness == Brightness.dark ? AdminTheme.fieldBgDark : Theme.of(context).colorScheme.surfaceContainerHighest,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.grey.shade200),
+            border: Border.all(color: Theme.of(context).brightness == Brightness.dark ? AdminTheme.fieldBorderDark : Theme.of(context).colorScheme.outlineVariant),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -1298,9 +1318,9 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
         Container(
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
-            color: Colors.grey.shade50,
+            color: Theme.of(context).brightness == Brightness.dark ? AdminTheme.fieldBgDark : Theme.of(context).colorScheme.surfaceContainerHighest,
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: Colors.grey.shade200),
+            border: Border.all(color: Theme.of(context).brightness == Brightness.dark ? AdminTheme.fieldBorderDark : Theme.of(context).colorScheme.outlineVariant),
           ),
           child: Column(
             children: [
@@ -1337,16 +1357,18 @@ class _WellnessCardManagerState extends State<WellnessCardManager> {
           width: double.infinity,
           height: 50,
           child: ElevatedButton.icon(
-            onPressed: _isLoading ? null : _createSubscription,
+            onPressed: _isLoading ? null : (_editingSubscription != null ? _updateSubscriptionFromForm : _createSubscription),
             icon: _isLoading
                 ? const SizedBox(
                     width: 20,
                     height: 20,
                     child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                   )
-                : const Icon(Icons.add_circle, size: 20),
+                : Icon(_editingSubscription != null ? Icons.save : Icons.add_circle, size: 20),
             label: Text(
-              _isLoading ? 'Creating...' : 'Create Wellness Subscription',
+              _isLoading
+                  ? (_editingSubscription != null ? 'Updating...' : 'Creating...')
+                  : (_editingSubscription != null ? 'Update Wellness Subscription' : 'Create Wellness Subscription'),
               style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
             ),
             style: ElevatedButton.styleFrom(
