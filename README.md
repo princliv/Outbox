@@ -1,8 +1,8 @@
-# Khyate B2B
+# Outbox B2B
 
 > A complete Flutter-based B2B booking and service-management application for customers, trainers/groomers, managers, and administrators.
 
-Khyate B2B provides an end-to-end platform for managing service bookings, trainers, subscriptions, packages, payments, availability, promotions, reviews, and operational master data.
+Outbox B2B provides an end-to-end platform for managing service bookings, trainers, subscriptions, packages, payments, availability, promotions, reviews, and operational master data.
 
 ---
 ## Demo-> https://drive.google.com/file/d/1VN0tlA-JZwLsXswstt2G8UEV8nWjnyK8/view?usp=sharing
