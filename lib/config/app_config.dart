@@ -29,6 +29,40 @@ class AppConfig {
     } catch (_) {}
     return const String.fromEnvironment('ADMIN_BASE_URL', defaultValue: _defaultAdminBaseUrl);
   }
+
+  /// Google Android API Key (loaded from .env GOOGLE_ANDROID_API_KEY)
+  static String get googleAndroidApiKey {
+    try {
+      if (dotenv.isInitialized) {
+        final val = dotenv.env['GOOGLE_ANDROID_API_KEY'];
+        if (val != null && val.trim().isNotEmpty) return val.trim();
+      }
+    } catch (_) {}
+    return const String.fromEnvironment('GOOGLE_ANDROID_API_KEY', defaultValue: '');
+  }
+
+  /// Google iOS API Key (loaded from .env GOOGLE_IOS_API_KEY)
+  static String get googleIosApiKey {
+    try {
+      if (dotenv.isInitialized) {
+        final val = dotenv.env['GOOGLE_IOS_API_KEY'];
+        if (val != null && val.trim().isNotEmpty) return val.trim();
+      }
+    } catch (_) {}
+    return const String.fromEnvironment('GOOGLE_IOS_API_KEY', defaultValue: '');
+  }
+
+  /// Google Web API Key (loaded from .env GOOGLE_WEB_API_KEY)
+  static String get googleWebApiKey {
+    try {
+      if (dotenv.isInitialized) {
+        final val = dotenv.env['GOOGLE_WEB_API_KEY'];
+        if (val != null && val.trim().isNotEmpty) return val.trim();
+      }
+    } catch (_) {}
+    return const String.fromEnvironment('GOOGLE_WEB_API_KEY', defaultValue: '');
+  }
 }
+
 
 
