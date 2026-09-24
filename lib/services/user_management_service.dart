@@ -3,7 +3,7 @@ import 'api_service.dart';
 import '../config/app_config.dart';
 
 class UserManagementService {
-  static const String baseUrl = AppConfig.baseUrl;
+  static String get baseUrl => AppConfig.baseUrl;
 
   /// GET /user/get-customers-filtered. Query: country, city, gender, ageGroup, isActive, subscriptionId, categoryId, isSingleClass.
   Future<List<dynamic>> getCustomersFiltered({

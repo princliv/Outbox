@@ -2,7 +2,7 @@ import 'api_service.dart';
 import '../config/app_config.dart';
 
 class OrderService {
-  static const String baseUrl = AppConfig.baseUrl;
+  static String get baseUrl => AppConfig.baseUrl;
 
   /// POST /order/create-order. Body: cartItems, addressId, paymentMethod, promoCode?
   Future<Map<String, dynamic>?> createOrder({

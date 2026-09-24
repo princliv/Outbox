@@ -4,7 +4,7 @@ import 'api_service.dart';
 import '../config/app_config.dart';
 
 class SubscriptionService {
-  static const String baseUrl = AppConfig.baseUrl;
+  static String get baseUrl => AppConfig.baseUrl;
   
   // 14.1 Create Subscription
   Future<Map<String, dynamic>?> createSubscription({

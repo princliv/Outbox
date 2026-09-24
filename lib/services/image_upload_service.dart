@@ -3,7 +3,7 @@ import 'api_service.dart';
 import '../config/app_config.dart';
 
 class ImageUploadService {
-  static const String baseUrl = AppConfig.baseUrl;
+  static String get baseUrl => AppConfig.baseUrl;
   
   // Upload a single image and get URL
   // Note: This assumes the backend has an image upload endpoint

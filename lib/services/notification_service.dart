@@ -10,7 +10,7 @@ import 'api_service.dart';
 import '../config/app_config.dart';
 
 class NotificationService {
-  static const String baseUrl = AppConfig.baseUrl;
+  static String get baseUrl => AppConfig.baseUrl;
   NotificationService._();
 
   static final FlutterLocalNotificationsPlugin _plugin =

@@ -4,7 +4,7 @@ import 'api_service.dart';
 import '../config/app_config.dart';
 
 class PackageService {
-  static const String baseUrl = AppConfig.baseUrl;
+  static String get baseUrl => AppConfig.baseUrl;
   
   // 15.1 Create Package
   // POST /api/v1/package/create-package (multipart)

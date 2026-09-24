@@ -3,7 +3,7 @@ import 'api_service.dart';
 import '../config/app_config.dart';
 
 class UserProfileService {
-  static const String baseUrl = AppConfig.baseUrl;
+  static String get baseUrl => AppConfig.baseUrl;
   
   // Get user profile by ID
   Future<Map<String, dynamic>?> getUserProfile(String userId) async {

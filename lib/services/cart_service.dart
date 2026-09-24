@@ -2,7 +2,7 @@ import 'api_service.dart';
 import '../config/app_config.dart';
 
 class CartService {
-  static const String baseUrl = AppConfig.baseUrl;
+  static String get baseUrl => AppConfig.baseUrl;
 
   /// POST /cart/create-cart. Body: subServiceId, quantity?, timeslotId, bookingDate, petDetails
   Future<Map<String, dynamic>?> createCart({

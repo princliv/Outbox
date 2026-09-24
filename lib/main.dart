@@ -4,11 +4,21 @@ import 'package:Outbox/screens/auth_check.dart';
 import 'package:Outbox/screens/onboarding_screen.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:provider/provider.dart';
 import 'services/notification_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Load environment variables from .env
+  try {
+    await dotenv.load(fileName: ".env");
+  } catch (e) {
+    if (kDebugMode) {
+      print('Warning: Failed to load .env file: $e');
+    }
+  }
 
   // Suppress DevTools connection warnings (harmless but noisy)
   FlutterError.onError = (FlutterErrorDetails details) {
@@ -27,6 +37,7 @@ void main() async {
   await NotificationService.initialize();
   runApp(const MyApp());
 }
+
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});

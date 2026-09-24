@@ -3,7 +3,7 @@ import 'api_service.dart';
 import '../config/app_config.dart';
 
 class SubServiceService {
-  static const String baseUrl = AppConfig.baseUrl;
+  static String get baseUrl => AppConfig.baseUrl;
   
   // 4.1 Create Sub Service
   Future<Map<String, dynamic>?> createSubService({

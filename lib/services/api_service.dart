@@ -6,7 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config/app_config.dart';
 
 class ApiService {
-  static const String baseUrl = AppConfig.baseUrl;
+  static String get baseUrl => AppConfig.baseUrl;
   
   // Get stored JWT token
   static Future<String?> getToken() async {

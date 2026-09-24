@@ -2,7 +2,7 @@ import 'api_service.dart';
 import '../config/app_config.dart';
 
 class AddressService {
-  static const String baseUrl = AppConfig.baseUrl;
+  static String get baseUrl => AppConfig.baseUrl;
   
   // 2.4 Create Address
   Future<Map<String, dynamic>?> createAddress({

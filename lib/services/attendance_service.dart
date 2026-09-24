@@ -2,7 +2,7 @@ import 'api_service.dart';
 import '../config/app_config.dart';
 
 class AttendanceService {
-  static const String baseUrl = AppConfig.baseUrl;
+  static String get baseUrl => AppConfig.baseUrl;
   
   // 16.3 Mark Class Attendance (Package Booking)
   Future<Map<String, dynamic>?> markClassAttendance({

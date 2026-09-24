@@ -3,7 +3,7 @@ import 'auth_service.dart';
 import '../config/app_config.dart';
 
 class PackageBookingService {
-  static const String baseUrl = AppConfig.baseUrl;
+  static String get baseUrl => AppConfig.baseUrl;
   
   // 16.1 Create Package Booking
   Future<Map<String, dynamic>?> createPackageBooking({

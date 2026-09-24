@@ -3,7 +3,7 @@ import 'api_service.dart';
 import '../config/app_config.dart';
 
 class AuthService {
-  static const String baseUrl = AppConfig.baseUrl;
+  static String get baseUrl => AppConfig.baseUrl;
   
   // 1.2 Register new user - API endpoint requires multipart/form-data
   Future<Map<String, dynamic>?> signUp({
